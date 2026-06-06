@@ -1,10 +1,83 @@
 services:
-  api:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mras
+      POSTGRES_USER: mras
+      POSTGRES_PASSWORD: mras
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mras"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.0
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  mras-vision:
+    build: ../../mras-vision
+    ports:
+      - "8001:8001"
+    environment:
+      DATABASE_URL: postgresql://mras:mras@postgres:5432/mras
+      QDRANT_URL: http://qdrant:6333
+      COMPOSER_URL: http://mras-composer:8002
+      DEEPFACE_BACKEND: ${DEEPFACE_BACKEND:-cpu}
+      FRAME_SAMPLE_RATE: ${FRAME_SAMPLE_RATE:-5}
+      CONFIDENCE_THRESHOLD: ${CONFIDENCE_THRESHOLD:-0.68}
+      SCREEN_ID: ${SCREEN_ID:-screen_0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    command: uvicorn main:app --host 0.0.0.0 --port 8001
+
+  mras-composer:
+    build: ../../mras-composer
+    ports:
+      - "8002:8002"
+    environment:
+      DATABASE_URL: postgresql://mras:mras@postgres:5432/mras
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY}
+      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID}
+      MISOONE_API_KEY: ${MISOONE_API_KEY:-}
+      ASSETS_DIR: /assets
+      ASSEMBLED_OUTPUT_DIR: /output
+      STANDARD_VIDEO_PATH: /assets/standard.mp4
+      FFMPEG_TIMEOUT: ${FFMPEG_TIMEOUT:-10}
+    volumes:
+      - ./assets:/assets:ro
+      - output_data:/output
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  mras-ops-api:
     build: ./api
     ports:
       - "8080:8080"
-    env_file: .env
-  frontend:
+    environment:
+      DATABASE_URL: postgresql://mras:mras@postgres:5432/mras
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  mras-ops-frontend:
     build: ./frontend
     ports:
       - "3000:3000"
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  output_data:
