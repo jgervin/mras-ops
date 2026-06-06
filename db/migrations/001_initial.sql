@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS identities (
     uuid             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     name             text        NOT NULL,
     embedding        float4[],
-    embedding_status text        NOT NULL DEFAULT 'pending',
+    embedding_status text        NOT NULL DEFAULT 'pending' CHECK (embedding_status IN ('pending', 'complete')),
     is_blocked       boolean     NOT NULL DEFAULT false,
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now()
