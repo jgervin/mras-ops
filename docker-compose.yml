@@ -50,7 +50,8 @@ services:
       DATABASE_URL: postgresql://mras:mras@postgres:5432/mras
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY}
       ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID}
-      MISOONE_API_KEY: ${MISOONE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_VOICE: ${GEMINI_VOICE:-Kore}
       ASSETS_DIR: /assets
       ASSEMBLED_OUTPUT_DIR: /output
       STANDARD_VIDEO_PATH: /assets/standard.mp4
