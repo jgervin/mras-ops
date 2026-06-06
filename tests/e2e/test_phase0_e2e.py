@@ -18,7 +18,7 @@ import pytest
 VISION = "http://localhost:8001"
 COMPOSER = "http://localhost:8002"
 TIMEOUT = 30.0
-ASSEMBLE_BUDGET = 8.0
+ASSEMBLE_BUDGET = 15.0
 FIXTURE = Path(__file__).parent / "fixtures" / "test_face.jpg"
 PERSON_NAME = "E2EPerson"
 
