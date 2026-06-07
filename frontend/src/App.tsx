@@ -29,7 +29,7 @@ export default function App() {
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
           <tr>
-            {['date', 'time', 'service', 'type', 'status', 'trigger_id', 'video'].map(h => (
+            {['date', 'time', 'service', 'type', 'status', 'confidence', 'trigger_id', 'video'].map(h => (
               <th key={h} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid #333' }}>{h}</th>
             ))}
           </tr>
@@ -40,6 +40,8 @@ export default function App() {
             const videoFile = ev.event_type === 'playback' && ev.status === 'dispatched'
               ? p?.video as string | undefined
               : undefined
+            const isDetection = ev.event_type === 'detection' && typeof p?.confidence === 'number'
+            const matched = isDetection && p?.is_new_visitor === false
             return (
               <tr key={i} style={{ color: ev.status === 'error' ? '#f88' : '#eee' }}>
                 <td style={{ padding: '2px 8px', color: '#aaa' }}>{new Date(ev.ts).toLocaleDateString()}</td>
@@ -47,6 +49,9 @@ export default function App() {
                 <td style={{ padding: '2px 8px' }}>{ev.service}</td>
                 <td style={{ padding: '2px 8px' }}>{ev.event_type}</td>
                 <td style={{ padding: '2px 8px' }}>{ev.status}</td>
+                <td style={{ padding: '2px 8px', color: matched ? '#6f6' : '#888' }}>
+                  {isDetection ? `${(p.confidence as number).toFixed(2)}${matched ? '' : ' (new)'}` : ''}
+                </td>
                 <td style={{ padding: '2px 8px', color: '#888' }}>{ev.trigger_id?.slice(0, 8)}…</td>
                 <td style={{ padding: '2px 8px' }}>
                   {videoFile && (
