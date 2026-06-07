@@ -17,13 +17,14 @@ services:
       retries: 10
 
   qdrant:
-    image: qdrant/qdrant:v1.9.0
+    image: qdrant/qdrant:v1.12.6
     ports:
       - "6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
 
   mras-vision:
+    profiles: ["docker-vision"]  # excluded from default 'docker compose up'; run natively on macOS (no camera passthrough in Docker)
     build: ../mras-vision
     ports:
       - "8001:8001"
