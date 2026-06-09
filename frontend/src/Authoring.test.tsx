@@ -37,6 +37,29 @@ test("preview: after upload, clicking Preview calls api.preview and renders vide
   });
 });
 
+test("help panel is hidden by default", () => {
+  render(<Authoring api={makeFakeApi()} />);
+  // "Worked example" only exists inside the help panel (not in the main form)
+  expect(screen.queryByText(/Worked example/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Authoring guide/i)).not.toBeInTheDocument();
+});
+
+test("clicking ? button reveals help panel", () => {
+  render(<Authoring api={makeFakeApi()} />);
+  fireEvent.click(screen.getByRole("button", { name: /help/i }));
+  expect(screen.getByText(/Worked example/i)).toBeInTheDocument();
+  expect(screen.getByText(/Authoring guide/i)).toBeInTheDocument();
+});
+
+test("clicking ? button again hides help panel", () => {
+  render(<Authoring api={makeFakeApi()} />);
+  const helpBtn = screen.getByRole("button", { name: /help/i });
+  fireEvent.click(helpBtn);
+  expect(screen.getByText(/Worked example/i)).toBeInTheDocument();
+  fireEvent.click(helpBtn);
+  expect(screen.queryByText(/Worked example/i)).not.toBeInTheDocument();
+});
+
 test("uploads component and shows status", async () => {
   const fakeApi = makeFakeApi();
   render(<Authoring api={fakeApi} />);
