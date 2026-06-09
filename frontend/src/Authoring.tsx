@@ -73,6 +73,30 @@ export function Authoring({ api }: { api: Api }) {
     setAdPreviewRendering(false);
   };
 
+  // --- delete (keep the registry from stacking up) ---
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function handleDeleteAd(id: string) {
+    setDeleteError(null);
+    try {
+      await api.deleteAd(id);
+      setAds(prev => prev.filter(a => a.id !== id));
+    } catch (e) {
+      setDeleteError(String(e));
+    }
+  }
+
+  async function handleDeleteComponent(id: string) {
+    setDeleteError(null);
+    try {
+      await api.deleteComponent(id);
+      setComponents(prev => prev.filter(c => c.id !== id));
+    } catch (e) {
+      // e.g. 409 when the component is still used by ads
+      setDeleteError(String(e));
+    }
+  }
+
   useEffect(() => {
     api.listComponents().then(setComponents).catch(() => {});
     api.listAds().then(setAds).catch(() => {});
@@ -350,7 +374,8 @@ export function Authoring({ api }: { api: Api }) {
         <ul>
           {components.map(c => (
             <li key={c.id} style={{ color: c.status === "ready" ? "#6f6" : "#f88" }}>
-              {c.slug} — {c.status}
+              {c.slug} — {c.status}{" "}
+              <button onClick={() => handleDeleteComponent(c.id)} title="delete component" style={{ marginLeft: 8, cursor: "pointer" }}>🗑 delete</button>
             </li>
           ))}
         </ul>
@@ -373,11 +398,13 @@ export function Authoring({ api }: { api: Api }) {
                   disabled={!baseOk}
                   title={baseOk ? undefined : "base video not found — fix or remove this ad"}
                   style={{ marginLeft: 8, cursor: baseOk ? "pointer" : "not-allowed" }}
-                >▶ preview</button>
+                >▶ preview</button>{" "}
+                <button onClick={() => handleDeleteAd(a.id)} title="delete ad" style={{ marginLeft: 4, cursor: "pointer" }}>🗑 delete</button>
               </li>
             );
           })}
         </ul>
+        {deleteError && <div style={{ color: "#f88", marginTop: 8 }}>{deleteError}</div>}
       </section>
 
       {/* ── Finished-ad preview popup ── */}

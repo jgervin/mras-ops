@@ -138,12 +138,14 @@ test("deleting a component calls the API and removes it from the list", async ()
   });
   render(<Authoring api={fakeApi} />);
 
-  const item = (await screen.findByText(/snowy/)).closest("li") as HTMLElement;
+  // Scope to the Components list — the slug also appears as a Create-Ad <select> option.
+  const section = (await screen.findByText(/Components \(/)).closest("section") as HTMLElement;
+  const item = within(section).getByText(/snowy/).closest("li") as HTMLElement;
   fireEvent.click(within(item).getByRole("button", { name: /delete/i }));
 
   await waitFor(() => {
     expect(fakeApi.deleteComponent).toHaveBeenCalledWith("c1");
-    expect(screen.queryByText(/snowy/)).not.toBeInTheDocument();
+    expect(within(section).queryByText(/snowy/)).not.toBeInTheDocument();
   });
 });
 
