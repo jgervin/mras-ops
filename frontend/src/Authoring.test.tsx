@@ -150,7 +150,7 @@ test("create ad: selecting a component renders its schema fields pre-filled and 
   // Selecting the component replaces the Default props (JSON) textarea with schema-driven fields.
   fireEvent.change(within(createSection).getByLabelText("component"), { target: { value: "c1" } });
 
-  expect(within(createSection).queryByLabelText(/default props \(json\)/i)).toBeNull();
+  expect(within(createSection).queryByText(/default props \(json\)/i)).toBeNull();
   expect((within(createSection).getByLabelText("count") as HTMLInputElement).value).toBe("6");
   expect((within(createSection).getByLabelText("colors") as HTMLInputElement).value).toBe("#f39c12, #e74c3c");
   expect((within(createSection).getByLabelText("text") as HTMLInputElement).value).toBe("");

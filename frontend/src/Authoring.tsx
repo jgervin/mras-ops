@@ -4,6 +4,134 @@ import type { Api, AdCreate, ComponentRecord, AdRecord } from "./api";
 // Stand-in viewer name used when previewing an ad's personalized field.
 const SAMPLE_NAME = "Jordan";
 
+// ── schema-driven prop fields ────────────────────────────────────────────────
+// Turn a component's JSON-Schema (draft-07) `properties` into a flat list of typed
+// fields. Returns null when the schema can't be rendered as simple fields (no
+// properties, or any prop is an unsupported type) — the caller falls back to the
+// editable JSON textarea. v1 scope: string / number / boolean / enum / array-of-primitive.
+type PropFieldKind = "string" | "number" | "boolean" | "enum" | "array";
+interface PropField {
+  name: string;
+  kind: PropFieldKind;
+  itemKind?: "string" | "number"; // array element type
+  options?: string[];             // enum choices
+  default?: unknown;
+  required: boolean;
+}
+
+function fieldsFromSchema(schema: unknown): PropField[] | null {
+  const s = schema as { properties?: Record<string, unknown>; required?: string[] } | undefined;
+  const props = s?.properties;
+  if (!props || typeof props !== "object" || Object.keys(props).length === 0) return null;
+  const required = new Set(s?.required ?? []);
+  const fields: PropField[] = [];
+  for (const [name, raw] of Object.entries(props)) {
+    const d = raw as { type?: string; enum?: unknown[]; items?: { type?: string }; default?: unknown };
+    const req = required.has(name);
+    let field: PropField | null = null;
+    if (Array.isArray(d.enum) && (d.type === "string" || d.type === undefined)) {
+      field = { name, kind: "enum", options: d.enum.map(String), default: d.default, required: req };
+    } else if (d.type === "string") {
+      field = { name, kind: "string", default: d.default, required: req };
+    } else if (d.type === "number" || d.type === "integer") {
+      field = { name, kind: "number", default: d.default, required: req };
+    } else if (d.type === "boolean") {
+      field = { name, kind: "boolean", default: d.default, required: req };
+    } else if (d.type === "array" && (d.items?.type === "string" || d.items?.type === "number" || d.items?.type === "integer")) {
+      field = { name, kind: "array", itemKind: d.items.type === "integer" ? "number" : (d.items.type as "string" | "number"), default: d.default, required: req };
+    }
+    if (!field) return null; // unsupported (nested object / union / …) → JSON textarea fallback
+    fields.push(field);
+  }
+  return fields;
+}
+
+// Initial editable display values (strings for text inputs, boolean for checkboxes),
+// pre-filled from each prop's schema default.
+function defaultFieldValues(fields: PropField[]): Record<string, unknown> {
+  const v: Record<string, unknown> = {};
+  for (const f of fields) {
+    if (f.kind === "boolean") v[f.name] = f.default === true;
+    else if (f.kind === "array") v[f.name] = Array.isArray(f.default) ? (f.default as unknown[]).join(", ") : "";
+    else v[f.name] = f.default === undefined || f.default === null ? "" : String(f.default);
+  }
+  return v;
+}
+
+// Coerce the editable display values back into typed props for the API.
+function buildProps(fields: PropField[], values: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const f of fields) {
+    const raw = values[f.name];
+    if (f.kind === "boolean") { out[f.name] = raw === true; continue; }
+    if (f.kind === "array") {
+      const parts = String(raw ?? "").split(",").map(p => p.trim()).filter(p => p.length > 0);
+      out[f.name] = f.itemKind === "number" ? parts.map(Number) : parts;
+      continue;
+    }
+    const str = String(raw ?? "").trim();
+    if (str === "") continue; // optional / empty → omit
+    if (f.kind === "number") {
+      const n = Number(str);
+      if (!Number.isNaN(n)) out[f.name] = n;
+      continue;
+    }
+    out[f.name] = str; // string | enum
+  }
+  return out;
+}
+
+function fieldTypeLabel(f: PropField): string {
+  return f.kind === "array" ? `${f.itemKind}[]` : f.kind;
+}
+
+// One labeled input per prop. `aria-label` carries the bare prop name as a clean a11y
+// handle; the visible label also shows the type (and a * for required props).
+function PropFields({ fields, values, onChange }: {
+  fields: PropField[];
+  values: Record<string, unknown>;
+  onChange: (name: string, value: unknown) => void;
+}) {
+  return (
+    <>
+      {fields.map(f => (
+        <div key={f.name} style={{ marginBottom: 4 }}>
+          <label>
+            {f.name} <span style={{ opacity: 0.6 }}>({fieldTypeLabel(f)}{f.required ? "*" : ""})</span>
+          </label>
+          {f.kind === "boolean" ? (
+            <input
+              aria-label={f.name}
+              type="checkbox"
+              checked={values[f.name] === true}
+              onChange={e => onChange(f.name, e.target.checked)}
+              style={{ marginLeft: 8 }}
+            />
+          ) : f.kind === "enum" ? (
+            <select
+              aria-label={f.name}
+              value={String(values[f.name] ?? "")}
+              onChange={e => onChange(f.name, e.target.value)}
+              style={{ marginLeft: 8 }}
+            >
+              {f.options!.map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+          ) : (
+            <input
+              aria-label={f.name}
+              type={f.kind === "number" ? "number" : "text"}
+              value={String(values[f.name] ?? "")}
+              placeholder={f.kind === "array" ? `comma-separated ${f.itemKind}s` : undefined}
+              onChange={e => onChange(f.name, e.target.value)}
+              style={{ marginLeft: 8, width: 300 }}
+            />
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
+
 export function Authoring({ api }: { api: Api }) {
   // --- help panel state ---
   const [helpOpen, setHelpOpen] = useState(false);
@@ -16,7 +144,8 @@ export function Authoring({ api }: { api: Api }) {
   const [uploading, setUploading] = useState(false);
 
   // --- preview state ---
-  const [propValues, setPropValues] = useState<Record<string, string>>({});
+  // Schema-driven field values (string for text/number/enum/array display, boolean for checkboxes).
+  const [propValues, setPropValues] = useState<Record<string, unknown>>({});
   // Raw JSON text for the no-schema fallback. Kept as a string (parsed only on Preview) so the
   // field stays editable — parsing on every keystroke reverted intermediate/invalid JSON.
   const [previewPropsJson, setPreviewPropsJson] = useState("{}");
@@ -40,6 +169,8 @@ export function Authoring({ api }: { api: Api }) {
     is_active: true,
   });
   const [adPropsJson, setAdPropsJson] = useState("{}");
+  // Schema-driven default-prop values for the selected component (mirrors propValues, for Create Ad).
+  const [adPropValues, setAdPropValues] = useState<Record<string, unknown>>({});
   const [adError, setAdError] = useState<string | null>(null);
   const [adCreated, setAdCreated] = useState(false);
 
@@ -86,6 +217,13 @@ export function Authoring({ api }: { api: Api }) {
     }).catch(() => {});
   }, [api]);
 
+  // When the Create-Ad component selection changes, pre-fill its schema fields with defaults.
+  useEffect(() => {
+    const comp = components.find(c => c.id === adForm.component_id);
+    const fields = fieldsFromSchema(comp?.props_schema);
+    setAdPropValues(fields ? defaultFieldValues(fields) : {});
+  }, [adForm.component_id, components]);
+
   async function handleUpload() {
     if (!file || !name) return;
     setUploading(true);
@@ -93,8 +231,9 @@ export function Authoring({ api }: { api: Api }) {
     try {
       const result = await api.uploadComponent(name, file);
       setUploadResult(result);
-      // reset prop values for new component
-      setPropValues({});
+      // Pre-fill the schema-driven fields with the component's defaults (or clear for the JSON fallback).
+      const fields = fieldsFromSchema(result.propsSchema);
+      setPropValues(fields ? defaultFieldValues(fields) : {});
       if (fileRef.current) fileRef.current.value = "";
     } catch (e) {
       setUploadResult({ status: "error", error: String(e) });
@@ -105,10 +244,10 @@ export function Authoring({ api }: { api: Api }) {
 
   async function handlePreview() {
     if (!uploadResult?.id) return;
-    const hasSchema = !!(uploadResult.propsSchema as { properties?: unknown } | undefined)?.properties;
+    const fields = fieldsFromSchema(uploadResult.propsSchema);
     let props: Record<string, unknown>;
-    if (hasSchema) {
-      props = propValues;
+    if (fields) {
+      props = buildProps(fields, propValues);
     } else {
       try {
         props = JSON.parse(previewPropsJson);
@@ -134,12 +273,18 @@ export function Authoring({ api }: { api: Api }) {
   async function handleCreateAd() {
     setAdError(null);
     setAdCreated(false);
+    const comp = components.find(c => c.id === adForm.component_id);
+    const fields = fieldsFromSchema(comp?.props_schema);
     let parsedProps: Record<string, unknown> = {};
-    try {
-      parsedProps = JSON.parse(adPropsJson);
-    } catch {
-      setAdError("default_props is not valid JSON");
-      return;
+    if (fields) {
+      parsedProps = buildProps(fields, adPropValues);
+    } else {
+      try {
+        parsedProps = JSON.parse(adPropsJson);
+      } catch {
+        setAdError("default_props is not valid JSON");
+        return;
+      }
     }
     try {
       const created = await api.createAd({ ...adForm, base_video: adForm.base_video.trim(), default_props: parsedProps });
@@ -152,10 +297,11 @@ export function Authoring({ api }: { api: Api }) {
     }
   }
 
-  // derive schema-driven prop fields
-  const schemaProps = uploadResult?.propsSchema
-    ? (uploadResult.propsSchema as { properties?: Record<string, unknown> }).properties ?? null
-    : null;
+  // Derive schema-driven prop fields for Preview (uploaded component) and Create Ad (selected
+  // component). Null when there are no parseable/renderable fields → JSON-textarea fallback.
+  const previewFields = fieldsFromSchema(uploadResult?.propsSchema);
+  const selectedComp = components.find(c => c.id === adForm.component_id);
+  const adFields = fieldsFromSchema(selectedComp?.props_schema);
 
   return (
     <div style={{ fontFamily: "monospace", padding: 16, background: "#111", color: "#eee", minHeight: "100vh" }}>
@@ -237,17 +383,12 @@ export function Authoring({ api }: { api: Api }) {
       {uploadResult?.status === "ready" && (
         <section style={{ marginBottom: 24 }}>
           <h3>Preview</h3>
-          {schemaProps ? (
-            Object.keys(schemaProps).map(key => (
-              <div key={key} style={{ marginBottom: 4 }}>
-                <label>{key}</label>
-                <input
-                  value={propValues[key] ?? ""}
-                  onChange={e => setPropValues(p => ({ ...p, [key]: e.target.value }))}
-                  style={{ marginLeft: 8 }}
-                />
-              </div>
-            ))
+          {previewFields ? (
+            <PropFields
+              fields={previewFields}
+              values={propValues}
+              onChange={(n, v) => setPropValues(p => ({ ...p, [n]: v }))}
+            />
           ) : (
             <div>
               <label>Props (JSON)</label>
@@ -301,6 +442,7 @@ export function Authoring({ api }: { api: Api }) {
         <div style={{ marginTop: 4 }}>
           <label>Component</label>
           <select
+            aria-label="component"
             value={adForm.component_id ?? ""}
             onChange={e => setAdForm(f => ({ ...f, component_id: e.target.value || null }))}
             style={{ marginLeft: 8 }}
@@ -312,13 +454,23 @@ export function Authoring({ api }: { api: Api }) {
           </select>
         </div>
         <div style={{ marginTop: 4 }}>
-          <label>Default props (JSON)</label>
-          <textarea
-            rows={3}
-            value={adPropsJson}
-            onChange={e => setAdPropsJson(e.target.value)}
-            style={{ marginLeft: 8, width: 300 }}
-          />
+          {adFields ? (
+            <PropFields
+              fields={adFields}
+              values={adPropValues}
+              onChange={(n, v) => setAdPropValues(p => ({ ...p, [n]: v }))}
+            />
+          ) : (
+            <>
+              <label>Default props (JSON)</label>
+              <textarea
+                rows={3}
+                value={adPropsJson}
+                onChange={e => setAdPropsJson(e.target.value)}
+                style={{ marginLeft: 8, width: 300 }}
+              />
+            </>
+          )}
         </div>
         <div style={{ marginTop: 4 }}>
           <label>Personalized field</label>

@@ -7,7 +7,10 @@ export interface ComponentRecord {
   id: string;
   slug: string;
   status: "ready" | "failed" | string;
-  propsSchema: Record<string, unknown>;
+  // POST /components (upload) returns the schema as `propsSchema` (camelCase); GET /components
+  // (list) returns it as `props_schema` (snake_case, straight from the DB column). Both optional.
+  propsSchema?: Record<string, unknown>;
+  props_schema?: Record<string, unknown>;
   error?: string;
 }
 
