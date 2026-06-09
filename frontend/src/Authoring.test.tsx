@@ -64,6 +64,40 @@ test("preview: Props (JSON) textarea is editable and parsed on preview", async (
   });
 });
 
+test("preview trims surrounding whitespace from the base video path", async () => {
+  const fakeApi = makeFakeApi();
+  render(<Authoring api={fakeApi} />);
+
+  const file = new File(["()=>{}"], "neon.js", { type: "application/javascript" });
+  fireEvent.change(screen.getByLabelText(/component file/i), { target: { files: [file] } });
+  fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "Neon" } });
+  fireEvent.click(screen.getByRole("button", { name: /upload/i }));
+  await waitFor(() => screen.getByRole("button", { name: /preview/i }));
+
+  fireEvent.change(screen.getByPlaceholderText(/path\/to\/base\.mp4/i), {
+    target: { value: "  /assets/standard.mp4  " },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /preview/i }));
+  await waitFor(() => {
+    expect(fakeApi.preview).toHaveBeenCalledWith("c1", {}, "/assets/standard.mp4");
+  });
+});
+
+test("create ad trims surrounding whitespace from the base video path", async () => {
+  const fakeApi = makeFakeApi();
+  render(<Authoring api={fakeApi} />);
+
+  fireEvent.change(screen.getByLabelText(/ad base video/i), {
+    target: { value: "  /assets/standard.mp4  " },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /create ad/i }));
+  await waitFor(() => {
+    expect(fakeApi.createAd).toHaveBeenCalledWith(
+      expect.objectContaining({ base_video: "/assets/standard.mp4" }),
+    );
+  });
+});
+
 test("help panel is hidden by default", () => {
   render(<Authoring api={makeFakeApi()} />);
   // "Worked example" only exists inside the help panel (not in the main form)
