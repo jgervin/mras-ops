@@ -14,3 +14,7 @@ out/
 
 # generated/preview clips (bind-mounted from the composer)
 output/
+
+# Ignore local Claude state (worktrees, settings) but track shared agents
+.claude/*
+!.claude/agents/
