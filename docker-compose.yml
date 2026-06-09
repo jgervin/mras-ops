@@ -52,6 +52,8 @@ services:
       - "3000"
     init: true  # tini reaps Chromium child processes and forwards SIGTERM to Node
     stop_grace_period: 20s
+    volumes:
+      - custom_components:/app/src/custom  # sidecar writes <slug>.tsx + registry.ts here; survives restarts
     healthcheck:
       # Node 22 has global fetch; reports "warm" once the bundle + Chromium are ready.
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
@@ -98,11 +100,17 @@ services:
       - "8080:8080"
     environment:
       DATABASE_URL: postgresql://mras:mras@postgres:5432/mras
+      OVERLAY_SIDECAR_URL: http://mras-overlays:3000
     depends_on:
       postgres:
         condition: service_healthy
+      mras-overlays:
+        condition: service_started
 
   mras-ops-frontend:
+    # Frontend reaches ops-api (8080) and composer (8002) from the BROWSER via host-published ports.
+    # api.ts defaults to http://localhost:8080 / http://localhost:8002 — correct for local demo.
+    # For a non-localhost deploy, pass VITE_OPS_API_URL and VITE_COMPOSER_URL as Docker build-args.
     build: ./frontend
     ports:
       - "3000:3000"
@@ -111,3 +119,4 @@ volumes:
   postgres_data:
   qdrant_data:
   output_data:
+  custom_components:
