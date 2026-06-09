@@ -158,7 +158,7 @@ def test_patch_ad_toggles_is_active(monkeypatch):
 
 def test_delete_ad(monkeypatch):
     fake_pool = AsyncMock()
-    fake_pool.execute = AsyncMock()
+    fake_pool.execute = AsyncMock(return_value="DELETE 1")
     monkeypatch.setenv("DATABASE_URL", "postgresql://fake/fake")
     monkeypatch.setattr("src.main.asyncpg.create_pool", AsyncMock(return_value=fake_pool))
 
@@ -174,7 +174,7 @@ def test_delete_ad(monkeypatch):
 
 def test_delete_component(monkeypatch):
     fake_pool = AsyncMock()
-    fake_pool.execute = AsyncMock()
+    fake_pool.execute = AsyncMock(return_value="DELETE 1")
     monkeypatch.setenv("DATABASE_URL", "postgresql://fake/fake")
     monkeypatch.setattr("src.main.asyncpg.create_pool", AsyncMock(return_value=fake_pool))
 

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -139,14 +140,24 @@ async def update_ad(ad_id: str, body: dict[str, Any]):
 
 @app.delete("/ads/{ad_id}")
 async def delete_ad(ad_id: str):
-    await _db.execute("DELETE FROM ads WHERE id=$1::uuid", ad_id)
+    try:
+        uuid.UUID(ad_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid id")
+    result = await _db.execute("DELETE FROM ads WHERE id=$1::uuid", ad_id)
+    if str(result).endswith(" 0"):
+        raise HTTPException(status_code=404, detail="not found")
     return {"status": "deleted"}
 
 
 @app.delete("/components/{component_id}")
 async def delete_component(component_id: str):
     try:
-        await _db.execute("DELETE FROM components WHERE id=$1::uuid", component_id)
+        uuid.UUID(component_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid id")
+    try:
+        result = await _db.execute("DELETE FROM components WHERE id=$1::uuid", component_id)
     except asyncpg.ForeignKeyViolationError:
         # ads.component_id REFERENCES components(id) with no ON DELETE — refuse rather than
         # orphan or silently cascade live ads.
@@ -154,6 +165,8 @@ async def delete_component(component_id: str):
             status_code=409,
             detail="component is used by existing ads — delete those ads first",
         )
+    if str(result).endswith(" 0"):
+        raise HTTPException(status_code=404, detail="not found")
     return {"status": "deleted"}
 
 
