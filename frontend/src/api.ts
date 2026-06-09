@@ -7,7 +7,10 @@ export interface ComponentRecord {
   id: string;
   slug: string;
   status: "ready" | "failed" | string;
-  propsSchema: Record<string, unknown>;
+  // POST /components returns camelCase `propsSchema`; GET /components returns the persisted
+  // column as snake_case `props_schema`. Both carry the same JSON-schema; read whichever exists.
+  propsSchema?: Record<string, unknown>;
+  props_schema?: Record<string, unknown>;
   error?: string;
 }
 
