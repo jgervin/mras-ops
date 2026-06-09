@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Authoring } from "./Authoring";
 import type { Api } from "./api";
@@ -91,6 +91,24 @@ test("creating an ad auto-renders a preview of the finished ad and shows it", as
     );
     expect(shown).toBe(true);
   });
+});
+
+test("an ad whose base video is not in the pool is flagged and its preview is disabled", async () => {
+  const fakeApi = makeFakeApi({
+    listBaseVideos: vi.fn().mockResolvedValue(["/assets/standard.mp4", "/assets/standard2.mp4"]),
+    listAds: vi.fn().mockResolvedValue([
+      { id: "bad", name: "snow2", base_video: "/assets/standard1.mp4", component_id: "c1", default_props: {}, personalized_field: "text", is_active: true },
+      { id: "good", name: "ok-ad", base_video: "/assets/standard.mp4", component_id: "c1", default_props: {}, personalized_field: "text", is_active: true },
+    ]),
+  });
+  render(<Authoring api={fakeApi} />);
+
+  const brokenItem = (await screen.findByText(/snow2/)).closest("li") as HTMLElement;
+  expect(within(brokenItem).getByText(/base video missing/i)).toBeInTheDocument();
+  expect(within(brokenItem).getByRole("button", { name: /preview/i })).toBeDisabled();
+
+  const okItem = screen.getByText(/ok-ad/).closest("li") as HTMLElement;
+  expect(within(okItem).getByRole("button", { name: /preview/i })).toBeEnabled();
 });
 
 test("help panel is hidden by default", () => {
