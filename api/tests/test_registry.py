@@ -156,6 +156,51 @@ def test_patch_ad_toggles_is_active(monkeypatch):
         assert call_args[1] is False
 
 
+def test_delete_ad(monkeypatch):
+    fake_pool = AsyncMock()
+    fake_pool.execute = AsyncMock()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake/fake")
+    monkeypatch.setattr("src.main.asyncpg.create_pool", AsyncMock(return_value=fake_pool))
+
+    ad_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    with TestClient(app) as client:
+        resp = client.delete(f"/ads/{ad_id}")
+
+    assert resp.status_code == 200
+    sql, arg = fake_pool.execute.call_args[0][0], fake_pool.execute.call_args[0][1]
+    assert "DELETE FROM ads" in sql
+    assert arg == ad_id
+
+
+def test_delete_component(monkeypatch):
+    fake_pool = AsyncMock()
+    fake_pool.execute = AsyncMock()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake/fake")
+    monkeypatch.setattr("src.main.asyncpg.create_pool", AsyncMock(return_value=fake_pool))
+
+    cid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    with TestClient(app) as client:
+        resp = client.delete(f"/components/{cid}")
+
+    assert resp.status_code == 200
+    assert "DELETE FROM components" in fake_pool.execute.call_args[0][0]
+
+
+def test_delete_component_in_use_returns_409(monkeypatch):
+    import asyncpg
+    fake_pool = AsyncMock()
+    fake_pool.execute = AsyncMock(side_effect=asyncpg.ForeignKeyViolationError("still referenced by ads"))
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake/fake")
+    monkeypatch.setattr("src.main.asyncpg.create_pool", AsyncMock(return_value=fake_pool))
+
+    cid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    with TestClient(app) as client:
+        resp = client.delete(f"/components/{cid}")
+
+    assert resp.status_code == 409
+    assert "ad" in resp.json()["detail"].lower()
+
+
 def test_upload_component_surfaces_sidecar_error(monkeypatch):
     mock_http_resp = MagicMock()
     mock_http_resp.status_code = 422
