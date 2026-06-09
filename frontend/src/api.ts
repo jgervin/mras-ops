@@ -7,7 +7,10 @@ export interface ComponentRecord {
   id: string;
   slug: string;
   status: "ready" | "failed" | string;
-  propsSchema: Record<string, unknown>;
+  // POST /components returns camelCase `propsSchema`; GET /components returns the persisted
+  // column as snake_case `props_schema`. Both carry the same JSON-schema; read whichever exists.
+  propsSchema?: Record<string, unknown>;
+  props_schema?: Record<string, unknown>;
   error?: string;
 }
 
@@ -42,6 +45,8 @@ export interface Api {
   listBaseVideos(): Promise<string[]>;
   createAd(ad: AdCreate): Promise<AdRecord>;
   preview(component_id: string, props: Record<string, unknown>, base_video: string): Promise<PreviewResult>;
+  deleteAd(id: string): Promise<void>;
+  deleteComponent(id: string): Promise<void>;
 }
 
 export const api: Api = {
@@ -89,5 +94,18 @@ export const api: Api = {
       body: JSON.stringify({ component_id, props, base_video }),
     });
     return res.json();
+  },
+
+  async deleteAd(id) {
+    const res = await fetch(`${OPS_API}/ads/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(`delete ad failed (${res.status})`);
+  },
+
+  async deleteComponent(id) {
+    const res = await fetch(`${OPS_API}/components/${id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({} as { detail?: string }));
+      throw new Error(body.detail ?? `delete component failed (${res.status})`);
+    }
   },
 };

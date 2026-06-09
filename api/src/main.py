@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="mras-ops", lifespan=lifespan)
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST", "PATCH"], allow_headers=["*"]
+    CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["*"]
 )
 
 
@@ -135,6 +135,26 @@ async def update_ad(ad_id: str, body: dict[str, Any]):
         ad_id,
     )
     return {"status": "ok"}
+
+
+@app.delete("/ads/{ad_id}")
+async def delete_ad(ad_id: str):
+    await _db.execute("DELETE FROM ads WHERE id=$1::uuid", ad_id)
+    return {"status": "deleted"}
+
+
+@app.delete("/components/{component_id}")
+async def delete_component(component_id: str):
+    try:
+        await _db.execute("DELETE FROM components WHERE id=$1::uuid", component_id)
+    except asyncpg.ForeignKeyViolationError:
+        # ads.component_id REFERENCES components(id) with no ON DELETE — refuse rather than
+        # orphan or silently cascade live ads.
+        raise HTTPException(
+            status_code=409,
+            detail="component is used by existing ads — delete those ads first",
+        )
+    return {"status": "deleted"}
 
 
 # ---------------------------------------------------------------------------
