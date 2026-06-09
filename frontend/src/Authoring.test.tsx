@@ -98,6 +98,36 @@ test("create ad trims surrounding whitespace from the base video path", async ()
   });
 });
 
+test("creating an ad auto-renders a preview of the finished ad and shows it", async () => {
+  const fakeApi = makeFakeApi({
+    createAd: vi.fn().mockResolvedValue({
+      id: "a1", name: "nike", component_id: "c1", base_video: "/assets/standard.mp4",
+      default_props: { count: 120 }, personalized_field: "text", is_active: true,
+    }),
+    preview: vi.fn().mockResolvedValue({ url: "http://example.com/ad.mp4" }),
+  });
+  render(<Authoring api={fakeApi} />);
+
+  fireEvent.change(screen.getByLabelText(/ad base video/i), { target: { value: "/assets/standard.mp4" } });
+  fireEvent.click(screen.getByRole("button", { name: /create ad/i }));
+
+  // The finished ad is rendered via /preview using the ad's own config.
+  await waitFor(() => expect(fakeApi.preview).toHaveBeenCalled());
+  const [compId, props, base] = (fakeApi.preview as ReturnType<typeof vi.fn>).mock.calls[0];
+  expect(compId).toBe("c1");
+  expect(base).toBe("/assets/standard.mp4");
+  expect(props.count).toBe(120);        // the ad's default props
+  expect(props.text).toBeTruthy();      // personalized field filled with a sample name
+
+  // The finished video is shown to the advertiser.
+  await waitFor(() => {
+    const shown = Array.from(document.querySelectorAll("video")).some(
+      v => v.getAttribute("src") === "http://example.com/ad.mp4",
+    );
+    expect(shown).toBe(true);
+  });
+});
+
 test("help panel is hidden by default", () => {
   render(<Authoring api={makeFakeApi()} />);
   // "Worked example" only exists inside the help panel (not in the main form)

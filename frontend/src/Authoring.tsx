@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { Api, AdCreate, ComponentRecord, AdRecord } from "./api";
 
+// Stand-in viewer name used when previewing an ad's personalized field.
+const SAMPLE_NAME = "Jordan";
+
 export function Authoring({ api }: { api: Api }) {
   // --- help panel state ---
   const [helpOpen, setHelpOpen] = useState(false);
@@ -38,6 +41,36 @@ export function Authoring({ api }: { api: Api }) {
   const [adPropsJson, setAdPropsJson] = useState("{}");
   const [adError, setAdError] = useState<string | null>(null);
   const [adCreated, setAdCreated] = useState(false);
+
+  // --- finished-ad preview modal ---
+  const [adPreviewUrl, setAdPreviewUrl] = useState<string | null>(null);
+  const [adPreviewError, setAdPreviewError] = useState<string | null>(null);
+  const [adPreviewRendering, setAdPreviewRendering] = useState(false);
+
+  // Render the finished ad (base + component + its default props, with the personalized field
+  // filled by a sample name) and pop it up so the advertiser can watch what they just made.
+  async function renderAdPreview(ad: AdRecord) {
+    setAdPreviewError(null);
+    setAdPreviewUrl(null);
+    setAdPreviewRendering(true);
+    const props: Record<string, unknown> = { ...(ad.default_props ?? {}) };
+    if (ad.personalized_field) props[ad.personalized_field] = SAMPLE_NAME;
+    try {
+      const res = await api.preview(ad.component_id ?? "", props, ad.base_video);
+      if (res.url) setAdPreviewUrl(res.url);
+      else setAdPreviewError(res.error ?? "unknown error");
+    } catch (e) {
+      setAdPreviewError(String(e));
+    } finally {
+      setAdPreviewRendering(false);
+    }
+  }
+
+  const closeAdPreview = () => {
+    setAdPreviewUrl(null);
+    setAdPreviewError(null);
+    setAdPreviewRendering(false);
+  };
 
   useEffect(() => {
     api.listComponents().then(setComponents).catch(() => {});
@@ -103,6 +136,8 @@ export function Authoring({ api }: { api: Api }) {
       const created = await api.createAd({ ...adForm, base_video: adForm.base_video.trim(), default_props: parsedProps });
       setAds(prev => [created, ...prev]);
       setAdCreated(true);
+      // Immediately render the finished ad and pop it up so the advertiser sees the result.
+      renderAdPreview(created);
     } catch (e) {
       setAdError(String(e));
     }
@@ -311,11 +346,33 @@ export function Authoring({ api }: { api: Api }) {
         <ul>
           {ads.map(a => (
             <li key={a.id}>
-              {a.name} | base: {a.base_video} | active: {String(a.is_active)}
+              {a.name} | base: {a.base_video} | active: {String(a.is_active)}{" "}
+              <button onClick={() => renderAdPreview(a)} style={{ marginLeft: 8, cursor: "pointer" }}>▶ preview</button>
             </li>
           ))}
         </ul>
       </section>
+
+      {/* ── Finished-ad preview popup ── */}
+      {(adPreviewRendering || adPreviewUrl || adPreviewError) && (
+        <div
+          onClick={closeAdPreview}
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
+          }}
+        >
+          <div onClick={e => e.stopPropagation()} style={{ background: "#1a1a1a", border: "1px solid #444", padding: 20, borderRadius: 8, maxWidth: "90vw" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 16 }}>
+              <strong>Your ad — preview (sample name: {SAMPLE_NAME})</strong>
+              <button onClick={closeAdPreview} style={{ cursor: "pointer" }}>✕ close</button>
+            </div>
+            {adPreviewRendering && <div>Rendering your ad… (a few seconds)</div>}
+            {adPreviewUrl && <video controls autoPlay src={adPreviewUrl} style={{ maxWidth: "80vw", maxHeight: "70vh", display: "block" }} />}
+            {adPreviewError && <div style={{ color: "#f88" }}>Error: {adPreviewError}</div>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
