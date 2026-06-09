@@ -6,6 +6,7 @@ vi.mock("./api", () => ({
   api: {
     listComponents: vi.fn().mockResolvedValue([]),
     listAds: vi.fn().mockResolvedValue([]),
+    listBaseVideos: vi.fn().mockResolvedValue([]),
     uploadComponent: vi.fn(),
     createAd: vi.fn(),
     preview: vi.fn(),

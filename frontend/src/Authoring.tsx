@@ -28,6 +28,7 @@ export function Authoring({ api }: { api: Api }) {
   // --- component/ad lists ---
   const [components, setComponents] = useState<ComponentRecord[]>([]);
   const [ads, setAds] = useState<AdRecord[]>([]);
+  const [baseVideos, setBaseVideos] = useState<string[]>([]);
 
   // --- create-ad form ---
   const [adForm, setAdForm] = useState<AdCreate>({
@@ -75,6 +76,14 @@ export function Authoring({ api }: { api: Api }) {
   useEffect(() => {
     api.listComponents().then(setComponents).catch(() => {});
     api.listAds().then(setAds).catch(() => {});
+    // Load the base-video pool and default both selectors to the first one (never empty).
+    api.listBaseVideos().then(vs => {
+      setBaseVideos(vs);
+      if (vs.length) {
+        setBaseVideo(prev => prev || vs[0]);
+        setAdForm(f => (f.base_video ? f : { ...f, base_video: vs[0] }));
+      }
+    }).catch(() => {});
   }, [api]);
 
   async function handleUpload() {
@@ -253,12 +262,15 @@ export function Authoring({ api }: { api: Api }) {
           )}
           <div style={{ marginTop: 8 }}>
             <label>Base video</label>
-            <input
+            <select
+              aria-label="base video"
               value={baseVideo}
               onChange={e => setBaseVideo(e.target.value)}
-              placeholder="path/to/base.mp4"
               style={{ marginLeft: 8, width: 300 }}
-            />
+            >
+              {baseVideos.length === 0 && <option value="">(no base videos in the pool)</option>}
+              {baseVideos.map(v => <option key={v} value={v}>{v}</option>)}
+            </select>
           </div>
           <button onClick={handlePreview} disabled={previewing} style={{ marginTop: 8 }}>
             {previewing ? "Previewing…" : "Preview"}
@@ -281,7 +293,10 @@ export function Authoring({ api }: { api: Api }) {
         </div>
         <div style={{ marginTop: 4 }}>
           <label>Base video</label>
-          <input aria-label="ad base video" value={adForm.base_video} onChange={e => setAdForm(f => ({ ...f, base_video: e.target.value }))} style={{ marginLeft: 8, width: 300 }} />
+          <select aria-label="ad base video" value={adForm.base_video} onChange={e => setAdForm(f => ({ ...f, base_video: e.target.value }))} style={{ marginLeft: 8, width: 300 }}>
+            <option value="">(choose a base video)</option>
+            {baseVideos.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
         </div>
         <div style={{ marginTop: 4 }}>
           <label>Component</label>
