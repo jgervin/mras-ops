@@ -14,6 +14,9 @@ export function Authoring({ api }: { api: Api }) {
 
   // --- preview state ---
   const [propValues, setPropValues] = useState<Record<string, string>>({});
+  // Raw JSON text for the no-schema fallback. Kept as a string (parsed only on Preview) so the
+  // field stays editable — parsing on every keystroke reverted intermediate/invalid JSON.
+  const [previewPropsJson, setPreviewPropsJson] = useState("{}");
   const [baseVideo, setBaseVideo] = useState("");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -60,10 +63,21 @@ export function Authoring({ api }: { api: Api }) {
 
   async function handlePreview() {
     if (!uploadResult?.id) return;
+    const hasSchema = !!(uploadResult.propsSchema as { properties?: unknown } | undefined)?.properties;
+    let props: Record<string, unknown>;
+    if (hasSchema) {
+      props = propValues;
+    } else {
+      try {
+        props = JSON.parse(previewPropsJson);
+      } catch {
+        setPreviewError("Props is not valid JSON");
+        return;
+      }
+    }
     setPreviewing(true);
     setPreviewUrl(null);
     setPreviewError(null);
-    const props = Object.fromEntries(Object.entries(propValues).map(([k, v]) => [k, v]));
     try {
       const result = await api.preview(uploadResult.id, props, baseVideo);
       if (result.url) setPreviewUrl(result.url);
@@ -194,11 +208,10 @@ export function Authoring({ api }: { api: Api }) {
             <div>
               <label>Props (JSON)</label>
               <textarea
+                aria-label="Props (JSON)"
                 rows={4}
-                value={JSON.stringify(propValues, null, 2)}
-                onChange={e => {
-                  try { setPropValues(JSON.parse(e.target.value)); } catch { /* ignore */ }
-                }}
+                value={previewPropsJson}
+                onChange={e => setPreviewPropsJson(e.target.value)}
                 style={{ marginLeft: 8, width: 300 }}
               />
             </div>

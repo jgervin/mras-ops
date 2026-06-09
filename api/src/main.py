@@ -45,18 +45,27 @@ async def upload_component(name: str = Form(...), file: UploadFile = File(...)):
     if r.status_code != 200:
         raise HTTPException(status_code=502, detail=f"overlay sidecar error {r.status_code}: {r.text[:200]}")
     body = r.json()
-    await _db.execute(
+    row = await _db.fetchrow(
         "INSERT INTO components (name, slug, status, error, props_schema) "
         "VALUES ($1,$2,$3,$4,$5::jsonb) "
         "ON CONFLICT (slug) DO UPDATE SET status=EXCLUDED.status, "
-        "error=EXCLUDED.error, props_schema=EXCLUDED.props_schema",
+        "error=EXCLUDED.error, props_schema=EXCLUDED.props_schema "
+        "RETURNING id",
         name,
         body["slug"],
         body["status"],
         body.get("error"),
         json.dumps(body.get("propsSchema") or {}),
     )
-    return body
+    # Return the DB UUID as `id` (not the sidecar's composition id) — it's what the ads FK
+    # and the composer's /preview lookup use, so the frontend can preview right after upload.
+    return {
+        "id": str(row["id"]),
+        "slug": body["slug"],
+        "status": body["status"],
+        "error": body.get("error"),
+        "propsSchema": body.get("propsSchema"),
+    }
 
 
 @app.get("/components")
