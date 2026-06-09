@@ -158,7 +158,7 @@ def test_patch_ad_toggles_is_active(monkeypatch):
 
 def test_delete_ad(monkeypatch):
     fake_pool = AsyncMock()
-    fake_pool.execute = AsyncMock()
+    fake_pool.execute = AsyncMock(return_value="DELETE 1")
     monkeypatch.setenv("DATABASE_URL", "postgresql://fake/fake")
     monkeypatch.setattr("src.main.asyncpg.create_pool", AsyncMock(return_value=fake_pool))
 
@@ -174,7 +174,7 @@ def test_delete_ad(monkeypatch):
 
 def test_delete_component(monkeypatch):
     fake_pool = AsyncMock()
-    fake_pool.execute = AsyncMock()
+    fake_pool.execute = AsyncMock(return_value="DELETE 1")
     monkeypatch.setenv("DATABASE_URL", "postgresql://fake/fake")
     monkeypatch.setattr("src.main.asyncpg.create_pool", AsyncMock(return_value=fake_pool))
 
@@ -229,3 +229,59 @@ def test_upload_component_surfaces_sidecar_error(monkeypatch):
 
     assert resp.status_code == 502
     fake_pool.fetchrow.assert_not_awaited()
+
+
+def test_delete_ad_non_uuid_returns_400(monkeypatch):
+    # #18: a non-UUID id must be rejected in Python BEFORE the DB call (no WHERE id=$1::uuid 500).
+    fake_pool = AsyncMock()
+    fake_pool.execute = AsyncMock()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake/fake")
+    monkeypatch.setattr("src.main.asyncpg.create_pool", AsyncMock(return_value=fake_pool))
+
+    with TestClient(app) as client:
+        resp = client.delete("/ads/not-a-uuid")
+
+    assert resp.status_code == 400
+    fake_pool.execute.assert_not_awaited()
+
+
+def test_delete_component_non_uuid_returns_400(monkeypatch):
+    # #18: a non-UUID id must be rejected in Python BEFORE the DB call.
+    fake_pool = AsyncMock()
+    fake_pool.execute = AsyncMock()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake/fake")
+    monkeypatch.setattr("src.main.asyncpg.create_pool", AsyncMock(return_value=fake_pool))
+
+    with TestClient(app) as client:
+        resp = client.delete("/components/nope")
+
+    assert resp.status_code == 400
+    fake_pool.execute.assert_not_awaited()
+
+
+def test_delete_ad_no_match_returns_404(monkeypatch):
+    # #19: "DELETE 0" command tag means no row matched → 404, not a silent 200.
+    fake_pool = AsyncMock()
+    fake_pool.execute = AsyncMock(return_value="DELETE 0")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake/fake")
+    monkeypatch.setattr("src.main.asyncpg.create_pool", AsyncMock(return_value=fake_pool))
+
+    ad_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    with TestClient(app) as client:
+        resp = client.delete(f"/ads/{ad_id}")
+
+    assert resp.status_code == 404
+
+
+def test_delete_component_no_match_returns_404(monkeypatch):
+    # #19: "DELETE 0" command tag means no row matched → 404, not a silent 200.
+    fake_pool = AsyncMock()
+    fake_pool.execute = AsyncMock(return_value="DELETE 0")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake/fake")
+    monkeypatch.setattr("src.main.asyncpg.create_pool", AsyncMock(return_value=fake_pool))
+
+    cid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    with TestClient(app) as client:
+        resp = client.delete(f"/components/{cid}")
+
+    assert resp.status_code == 404
