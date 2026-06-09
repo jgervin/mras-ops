@@ -39,6 +39,7 @@ export interface Api {
   uploadComponent(name: string, file: File): Promise<ComponentRecord>;
   listComponents(): Promise<ComponentRecord[]>;
   listAds(): Promise<AdRecord[]>;
+  listBaseVideos(): Promise<string[]>;
   createAd(ad: AdCreate): Promise<AdRecord>;
   preview(component_id: string, props: Record<string, unknown>, base_video: string): Promise<PreviewResult>;
 }
@@ -60,6 +61,16 @@ export const api: Api = {
   async listAds() {
     const res = await fetch(`${OPS_API}/ads`);
     return res.json();
+  },
+
+  // Base videos are the composer's idle pool (/playlist returns full URLs); the composer reads
+  // them by container path, so map each URL to its /assets/<name> path.
+  async listBaseVideos() {
+    const res = await fetch(`${COMPOSER}/playlist`);
+    const data = await res.json();
+    return (data.videos ?? []).map((u: string) => {
+      try { return new URL(u).pathname; } catch { return u; }
+    });
   },
 
   async createAd(ad) {
