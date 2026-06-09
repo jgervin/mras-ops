@@ -85,7 +85,9 @@ services:
       OVERLAY_POSITION: ${OVERLAY_POSITION:-top}
     volumes:
       - ./assets:/assets:ro
-      - output_data:/output
+      # Bind-mount so generated/preview clips land in a real host folder
+      # (/Users/jn/code/mras-ops/output) you can open in Finder — not a hidden Docker volume.
+      - ./output:/output
     depends_on:
       postgres:
         condition: service_healthy
@@ -118,5 +120,4 @@ services:
 volumes:
   postgres_data:
   qdrant_data:
-  output_data:
   custom_components:
