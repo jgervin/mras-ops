@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
-const OPS_API = import.meta.env.VITE_OPS_API ?? "http://localhost:8080";
-const COMPOSER = import.meta.env.VITE_COMPOSER ?? "http://localhost:8002";
+const OPS_API = import.meta.env.VITE_OPS_API_URL ?? "http://localhost:8080";
+const COMPOSER = import.meta.env.VITE_COMPOSER_URL ?? "http://localhost:8002";
 
 export interface ComponentRecord {
   id: string;

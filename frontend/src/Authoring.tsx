@@ -47,6 +47,9 @@ export function Authoring({ api }: { api: Api }) {
       setUploadResult(result);
       // reset prop values for new component
       setPropValues({});
+      if (fileRef.current) fileRef.current.value = "";
+    } catch (e) {
+      setUploadResult({ status: "error", error: String(e) });
     } finally {
       setUploading(false);
     }
@@ -62,6 +65,8 @@ export function Authoring({ api }: { api: Api }) {
       const result = await api.preview(uploadResult.id, props, baseVideo);
       if (result.url) setPreviewUrl(result.url);
       else setPreviewError(result.error ?? "unknown error");
+    } catch (e) {
+      setPreviewError(String(e));
     } finally {
       setPreviewing(false);
     }
