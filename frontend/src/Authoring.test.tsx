@@ -52,7 +52,8 @@ test("preview: Props (JSON) textarea is editable and parsed on preview", async (
   render(<Authoring api={fakeApi} />);
   await uploadAComponent();
 
-  const ta = screen.getByLabelText(/props \(json\)/i) as HTMLTextAreaElement;
+  // Scope to the Preview section: Create Ad now also has a (fallback) "default props (json)" box.
+  const ta = within(previewSection()).getByLabelText(/props \(json\)/i) as HTMLTextAreaElement;
   // Intermediate (invalid) JSON must stick — the old code re-parsed every keystroke and reverted it.
   fireEvent.change(ta, { target: { value: '{"count":' } });
   expect(ta.value).toBe('{"count":');
