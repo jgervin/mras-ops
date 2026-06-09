@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { Authoring } from './Authoring'
+import { api } from './api'
 
 const OPS_API = import.meta.env.VITE_OPS_API_URL ?? 'http://localhost:8080'
 
@@ -24,7 +26,9 @@ export default function App() {
   }, [])
 
   return (
-    <div style={{ fontFamily: 'monospace', padding: 16, background: '#111', color: '#eee', minHeight: '100vh' }}>
+    <div style={{ fontFamily: 'monospace', background: '#111', color: '#eee', minHeight: '100vh' }}>
+      <Authoring api={api} />
+      <div style={{ padding: 16 }}>
       <h2 style={{ marginBottom: 12 }}>MRAS Activity Feed</h2>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
@@ -64,6 +68,7 @@ export default function App() {
           })}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }
