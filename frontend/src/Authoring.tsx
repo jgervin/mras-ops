@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import type { Api, AdCreate, ComponentRecord, AdRecord } from "./api";
 
 export function Authoring({ api }: { api: Api }) {
+  // --- help panel state ---
+  const [helpOpen, setHelpOpen] = useState(false);
+
   // --- upload state ---
   const [name, setName] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -98,7 +101,44 @@ export function Authoring({ api }: { api: Api }) {
 
   return (
     <div style={{ fontFamily: "monospace", padding: 16, background: "#111", color: "#eee", minHeight: "100vh" }}>
-      <h2>Component Authoring</h2>
+      <h2 style={{ display: "inline-block", marginRight: 12 }}>Component Authoring</h2>
+      <button
+        aria-label="help"
+        onClick={() => setHelpOpen(o => !o)}
+        style={{ fontSize: 12, padding: "2px 8px", cursor: "pointer" }}
+      >?</button>
+
+      {helpOpen && (
+        <section style={{ marginBottom: 24, border: "1px solid #444", padding: 12, background: "#1a1a1a" }}>
+          <h3 style={{ marginTop: 0 }}>Authoring guide</h3>
+
+          <h4>Components (styles)</h4>
+          <ul>
+            <li>A component is a Remotion .tsx that defines how text animates and declares its inputs via a zod <code>schema</code>.</li>
+            <li>Upload it once; it appears under Components as <code>ready</code>, then select it in Create Ad.</li>
+            <li>Example component: <code>/Users/jn/code/mras-overlays/examples/HelloName.tsx</code> (its props: text, color)</li>
+          </ul>
+
+          <h4>Create Ad fields</h4>
+          <ul>
+            <li><strong>Ad name</strong> — a label for you (e.g. hello-jason).</li>
+            <li><strong>Base video</strong> — the clip the overlay is drawn on. Must be a path the composer can read: <code>/assets/standard.mp4</code> (also /assets/standard2.mp4, /assets/standard3.mp4, /assets/standard4.mp4).</li>
+            <li><strong>Component</strong> — one of your uploaded components (the animation style).</li>
+            <li><strong>Default props (JSON)</strong> — fixed inputs passed to the component for everyone; keys must match the component's schema. Example: <code>{"{"}"color":"#ff2d2d"{"}"}</code></li>
+            <li><strong>Personalized field</strong> — the ONE prop replaced at runtime with the recognized viewer's name. Example: <code>text</code>. Leave blank for a non-personalized ad.</li>
+            <li><strong>Active</strong> — marks this ad live. A recognized viewer's trigger renders the active custom ad (most recent wins). Unchecked = saved but not served.</li>
+          </ul>
+
+          <h4>Worked example (HelloName)</h4>
+          <ol>
+            <li>Upload <code>/Users/jn/code/mras-overlays/examples/HelloName.tsx</code> (Name: HelloName) → wait for "ready".</li>
+            <li>Create Ad: Ad name <code>hello-jason</code>, Base video <code>/assets/standard.mp4</code>, Component <code>HelloName</code>, Default props <code>{"{"}"color":"#ff2d2d"{"}"}</code>, Personalized field <code>text</code>, Active ✓ → Create.</li>
+            <li>Trigger an identified viewer → the kiosk plays /assets/standard.mp4 with their name animated in red.</li>
+          </ol>
+
+          <p><strong>Precedence:</strong> identified viewer → active custom ad (M4); else the built-in name overlay (M3); unidentified viewer → nothing plays (the kiosk idle pool keeps looping).</p>
+        </section>
+      )}
 
       {/* ── Upload ── */}
       <section style={{ marginBottom: 24 }}>
