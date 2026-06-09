@@ -11,6 +11,8 @@ function makeFakeApi(overrides: Partial<Api> = {}): Api {
     listBaseVideos: vi.fn().mockResolvedValue(["/assets/standard.mp4", "/assets/standard2.mp4"]),
     createAd: vi.fn().mockResolvedValue({ id: "a1" }),
     preview: vi.fn().mockResolvedValue({ url: "http://example.com/preview.mp4" }),
+    deleteAd: vi.fn().mockResolvedValue(undefined),
+    deleteComponent: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -109,6 +111,40 @@ test("an ad whose base video is not in the pool is flagged and its preview is di
 
   const okItem = screen.getByText(/ok-ad/).closest("li") as HTMLElement;
   expect(within(okItem).getByRole("button", { name: /preview/i })).toBeEnabled();
+});
+
+test("deleting an ad calls the API and removes it from the list", async () => {
+  const fakeApi = makeFakeApi({
+    listAds: vi.fn().mockResolvedValue([
+      { id: "a1", name: "doomed-ad", base_video: "/assets/standard.mp4", component_id: "c1", default_props: {}, personalized_field: "text", is_active: true },
+    ]),
+  });
+  render(<Authoring api={fakeApi} />);
+
+  const item = (await screen.findByText(/doomed-ad/)).closest("li") as HTMLElement;
+  fireEvent.click(within(item).getByRole("button", { name: /delete/i }));
+
+  await waitFor(() => {
+    expect(fakeApi.deleteAd).toHaveBeenCalledWith("a1");
+    expect(screen.queryByText(/doomed-ad/)).not.toBeInTheDocument();
+  });
+});
+
+test("deleting a component calls the API and removes it from the list", async () => {
+  const fakeApi = makeFakeApi({
+    listComponents: vi.fn().mockResolvedValue([
+      { id: "c1", slug: "snowy", status: "ready", propsSchema: {} },
+    ]),
+  });
+  render(<Authoring api={fakeApi} />);
+
+  const item = (await screen.findByText(/snowy/)).closest("li") as HTMLElement;
+  fireEvent.click(within(item).getByRole("button", { name: /delete/i }));
+
+  await waitFor(() => {
+    expect(fakeApi.deleteComponent).toHaveBeenCalledWith("c1");
+    expect(screen.queryByText(/snowy/)).not.toBeInTheDocument();
+  });
 });
 
 test("help panel is hidden by default", () => {
