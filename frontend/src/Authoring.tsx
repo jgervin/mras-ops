@@ -74,26 +74,28 @@ export function Authoring({ api }: { api: Api }) {
   };
 
   // --- delete (keep the registry from stacking up) ---
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Per-section delete errors so each surfaces next to the list it belongs to.
+  const [adDeleteError, setAdDeleteError] = useState<string | null>(null);
+  const [componentDeleteError, setComponentDeleteError] = useState<string | null>(null);
 
   async function handleDeleteAd(id: string) {
-    setDeleteError(null);
+    setAdDeleteError(null);
     try {
       await api.deleteAd(id);
       setAds(prev => prev.filter(a => a.id !== id));
     } catch (e) {
-      setDeleteError(String(e));
+      setAdDeleteError(String(e));
     }
   }
 
   async function handleDeleteComponent(id: string) {
-    setDeleteError(null);
+    setComponentDeleteError(null);
     try {
       await api.deleteComponent(id);
       setComponents(prev => prev.filter(c => c.id !== id));
     } catch (e) {
       // e.g. 409 when the component is still used by ads
-      setDeleteError(String(e));
+      setComponentDeleteError(String(e));
     }
   }
 
@@ -379,6 +381,7 @@ export function Authoring({ api }: { api: Api }) {
             </li>
           ))}
         </ul>
+        {componentDeleteError && <div style={{ color: "#f88", marginTop: 8 }}>{componentDeleteError}</div>}
       </section>
 
       <section>
@@ -404,7 +407,7 @@ export function Authoring({ api }: { api: Api }) {
             );
           })}
         </ul>
-        {deleteError && <div style={{ color: "#f88", marginTop: 8 }}>{deleteError}</div>}
+        {adDeleteError && <div style={{ color: "#f88", marginTop: 8 }}>{adDeleteError}</div>}
       </section>
 
       {/* ── Finished-ad preview popup ── */}
