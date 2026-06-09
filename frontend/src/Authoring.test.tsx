@@ -149,6 +149,29 @@ test("deleting a component calls the API and removes it from the list", async ()
   });
 });
 
+test("a failed component delete surfaces the error in the Components section (not buried under Ads)", async () => {
+  const fakeApi = makeFakeApi({
+    listComponents: vi.fn().mockResolvedValue([
+      { id: "c1", slug: "snowy", status: "ready", propsSchema: {} },
+    ]),
+    deleteComponent: vi
+      .fn()
+      .mockRejectedValue(new Error("component is used by existing ads — delete those ads first")),
+  });
+  render(<Authoring api={fakeApi} />);
+
+  const section = (await screen.findByText(/Components \(/)).closest("section") as HTMLElement;
+  const item = within(section).getByText(/snowy/).closest("li") as HTMLElement;
+  fireEvent.click(within(item).getByRole("button", { name: /delete/i }));
+
+  // The error must appear where the user clicked — inside the Components section — not under Ads.
+  await waitFor(() => {
+    expect(within(section).getByText(/used by existing ads/i)).toBeInTheDocument();
+  });
+  // Delete was refused, so the component remains.
+  expect(within(section).getByText(/snowy/)).toBeInTheDocument();
+});
+
 test("help panel is hidden by default", () => {
   render(<Authoring api={makeFakeApi()} />);
   expect(screen.queryByText(/Worked example/i)).not.toBeInTheDocument();
