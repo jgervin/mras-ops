@@ -7,7 +7,7 @@ from typing import Any
 
 import asyncpg
 import httpx
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -36,9 +36,14 @@ app.add_middleware(
 
 @app.post("/components")
 async def upload_component(name: str = Form(...), file: UploadFile = File(...)):
-    source = (await file.read()).decode()
-    async with httpx.AsyncClient() as http:
+    try:
+        source = (await file.read()).decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="component file must be UTF-8 text")
+    async with httpx.AsyncClient(timeout=120) as http:
         r = await http.post(f"{_SIDECAR_URL}/components", json={"name": name, "source": source})
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"overlay sidecar error {r.status_code}: {r.text[:200]}")
     body = r.json()
     await _db.execute(
         "INSERT INTO components (name, slug, status, error, props_schema) "
@@ -101,7 +106,9 @@ async def create_ad(ad: AdIn):
 
 @app.get("/ads")
 async def list_ads():
-    rows = await _db.fetch("SELECT * FROM ads ORDER BY created_at DESC")
+    rows = await _db.fetch(
+        "SELECT id,name,base_video,component_id,default_props,personalized_field,is_active,created_at FROM ads ORDER BY created_at DESC"
+    )
     result = []
     for row in rows:
         d = dict(row)
@@ -115,7 +122,7 @@ async def list_ads():
 async def update_ad(ad_id: str, body: dict[str, Any]):
     await _db.execute(
         "UPDATE ads SET is_active=$1 WHERE id=$2::uuid",
-        body.get("is_active"),
+        bool(body.get("is_active", False)),
         ad_id,
     )
     return {"status": "ok"}

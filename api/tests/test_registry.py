@@ -46,6 +46,7 @@ def test_upload_component_forwards_to_sidecar_and_persists(monkeypatch):
     sidecar_resp = {"id": "comp-neon", "slug": "neon", "propsSchema": {}, "status": "ready"}
 
     mock_http_resp = MagicMock()
+    mock_http_resp.status_code = 200
     mock_http_resp.json.return_value = sidecar_resp
 
     mock_http_instance = AsyncMock()
