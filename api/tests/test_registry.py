@@ -42,8 +42,10 @@ def test_create_ad_persists_and_returns_id(monkeypatch):
     assert resp.json()["id"] == fake_id
 
 
-def test_upload_component_forwards_to_sidecar_and_persists(monkeypatch):
-    sidecar_resp = {"id": "comp-neon", "slug": "neon", "propsSchema": {}, "status": "ready"}
+def test_upload_component_returns_db_uuid_not_composition_id(monkeypatch):
+    # The sidecar returns the COMPOSITION id ("comp-neon"); ops-api must return the DB UUID
+    # (what the ads FK + /preview lookup use) so the frontend can preview right after upload.
+    sidecar_resp = {"id": "comp-neon", "slug": "neon", "propsSchema": {"x": 1}, "status": "ready"}
 
     mock_http_resp = MagicMock()
     mock_http_resp.status_code = 200
@@ -56,8 +58,9 @@ def test_upload_component_forwards_to_sidecar_and_persists(monkeypatch):
 
     mock_async_client_cls = MagicMock(return_value=mock_http_instance)
 
+    db_uuid = "11111111-1111-1111-1111-111111111111"
     fake_pool = AsyncMock()
-    fake_pool.execute = AsyncMock()
+    fake_pool.fetchrow = AsyncMock(return_value={"id": db_uuid})
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://fake/fake")
     monkeypatch.setattr("src.main.asyncpg.create_pool", AsyncMock(return_value=fake_pool))
@@ -71,9 +74,12 @@ def test_upload_component_forwards_to_sidecar_and_persists(monkeypatch):
         )
 
     assert resp.status_code == 200
-    assert resp.json()["slug"] == "neon"
+    body = resp.json()
+    assert body["id"] == db_uuid          # DB UUID, NOT the sidecar's "comp-neon"
+    assert body["slug"] == "neon"
+    assert body["propsSchema"] == {"x": 1}
     mock_http_instance.post.assert_awaited_once()
-    fake_pool.execute.assert_awaited_once()
+    fake_pool.fetchrow.assert_awaited_once()
 
 
 def test_list_components_decodes_jsonb(monkeypatch):
@@ -163,7 +169,7 @@ def test_upload_component_surfaces_sidecar_error(monkeypatch):
     mock_async_client_cls = MagicMock(return_value=mock_http_instance)
 
     fake_pool = AsyncMock()
-    fake_pool.execute = AsyncMock()
+    fake_pool.fetchrow = AsyncMock()
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://fake/fake")
     monkeypatch.setattr("src.main.asyncpg.create_pool", AsyncMock(return_value=fake_pool))
@@ -177,4 +183,4 @@ def test_upload_component_surfaces_sidecar_error(monkeypatch):
         )
 
     assert resp.status_code == 502
-    fake_pool.execute.assert_not_awaited()
+    fake_pool.fetchrow.assert_not_awaited()
