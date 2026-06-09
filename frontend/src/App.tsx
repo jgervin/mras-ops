@@ -13,9 +13,13 @@ interface MRASEvent {
   payload: Record<string, unknown> | string
 }
 
+type Tab = 'authoring' | 'feed'
+
 export default function App() {
   const [events, setEvents] = useState<MRASEvent[]>([])
+  const [tab, setTab] = useState<Tab>('authoring')
 
+  // Stay subscribed regardless of the active tab, so the feed is current when switched to.
   useEffect(() => {
     const es = new EventSource(`${OPS_API}/events/stream`)
     es.onmessage = (e) => {
@@ -25,9 +29,27 @@ export default function App() {
     return () => es.close()
   }, [])
 
+  const tabBtn = (id: Tab, label: string) => (
+    <button
+      onClick={() => setTab(id)}
+      style={{
+        fontFamily: 'monospace', fontSize: 14, padding: '8px 16px', cursor: 'pointer',
+        background: tab === id ? '#222' : 'transparent', color: tab === id ? '#fff' : '#888',
+        border: 'none', borderBottom: tab === id ? '2px solid #4af' : '2px solid transparent',
+      }}
+    >{label}</button>
+  )
+
   return (
     <div style={{ fontFamily: 'monospace', background: '#111', color: '#eee', minHeight: '100vh' }}>
-      <Authoring api={api} />
+      <nav style={{ display: 'flex', gap: 4, borderBottom: '1px solid #333', padding: '0 8px' }}>
+        {tabBtn('authoring', 'Authoring')}
+        {tabBtn('feed', 'Activity Feed')}
+      </nav>
+
+      {tab === 'authoring' && <Authoring api={api} />}
+
+      {tab === 'feed' && (
       <div style={{ padding: 16 }}>
       <h2 style={{ marginBottom: 12 }}>MRAS Activity Feed</h2>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -69,6 +91,7 @@ export default function App() {
         </tbody>
       </table>
       </div>
+      )}
     </div>
   )
 }
