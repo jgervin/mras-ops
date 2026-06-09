@@ -359,12 +359,24 @@ export function Authoring({ api }: { api: Api }) {
       <section>
         <h3>Ads ({ads.length})</h3>
         <ul>
-          {ads.map(a => (
-            <li key={a.id}>
-              {a.name} | base: {a.base_video} | active: {String(a.is_active)}{" "}
-              <button onClick={() => renderAdPreview(a)} style={{ marginLeft: 8, cursor: "pointer" }}>▶ preview</button>
-            </li>
-          ))}
+          {ads.map(a => {
+            // An ad is broken if its base video isn't in the pool (e.g. a stale record from
+            // before the base-video dropdown, or a clip later removed from /assets). Don't offer
+            // a preview that can only fail. Gate on a loaded pool to avoid false flags during load.
+            const baseOk = baseVideos.length === 0 || baseVideos.includes(a.base_video);
+            return (
+              <li key={a.id} style={baseOk ? undefined : { color: "#f88" }}>
+                {a.name} | base: {a.base_video} | active: {String(a.is_active)}
+                {!baseOk && " | ⚠ base video missing"}{" "}
+                <button
+                  onClick={() => renderAdPreview(a)}
+                  disabled={!baseOk}
+                  title={baseOk ? undefined : "base video not found — fix or remove this ad"}
+                  style={{ marginLeft: 8, cursor: baseOk ? "pointer" : "not-allowed" }}
+                >▶ preview</button>
+              </li>
+            );
+          })}
         </ul>
       </section>
 
