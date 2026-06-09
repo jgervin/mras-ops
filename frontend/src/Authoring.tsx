@@ -79,7 +79,7 @@ export function Authoring({ api }: { api: Api }) {
     setPreviewUrl(null);
     setPreviewError(null);
     try {
-      const result = await api.preview(uploadResult.id, props, baseVideo);
+      const result = await api.preview(uploadResult.id, props, baseVideo.trim());
       if (result.url) setPreviewUrl(result.url);
       else setPreviewError(result.error ?? "unknown error");
     } catch (e) {
@@ -100,7 +100,7 @@ export function Authoring({ api }: { api: Api }) {
       return;
     }
     try {
-      const created = await api.createAd({ ...adForm, default_props: parsedProps });
+      const created = await api.createAd({ ...adForm, base_video: adForm.base_video.trim(), default_props: parsedProps });
       setAds(prev => [created, ...prev]);
       setAdCreated(true);
     } catch (e) {
@@ -246,7 +246,7 @@ export function Authoring({ api }: { api: Api }) {
         </div>
         <div style={{ marginTop: 4 }}>
           <label>Base video</label>
-          <input value={adForm.base_video} onChange={e => setAdForm(f => ({ ...f, base_video: e.target.value }))} style={{ marginLeft: 8, width: 300 }} />
+          <input aria-label="ad base video" value={adForm.base_video} onChange={e => setAdForm(f => ({ ...f, base_video: e.target.value }))} style={{ marginLeft: 8, width: 300 }} />
         </div>
         <div style={{ marginTop: 4 }}>
           <label>Component</label>
