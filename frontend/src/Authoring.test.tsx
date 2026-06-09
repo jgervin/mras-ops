@@ -1,7 +1,22 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Authoring } from "./Authoring";
 import type { Api } from "./api";
+
+// A real draft-07 schema as emitted by the sidecar (M5 Task 1) for a component's props.
+const PROPS_SCHEMA = {
+  $schema: "http://json-schema.org/draft-07/schema#",
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    count: { type: "number", default: 6 },
+    colors: { type: "array", items: { type: "string" }, default: ["#f39c12", "#e74c3c"] },
+    speed: { type: "number", default: 1 },
+    text: { type: "string" },
+    color: { type: "string", default: "#ffffff" },
+  },
+  required: ["text"],
+};
 
 function makeFakeApi(overrides: Partial<Api> = {}): Api {
   return {
@@ -91,6 +106,62 @@ test("creating an ad auto-renders a preview of the finished ad and shows it", as
     );
     expect(shown).toBe(true);
   });
+});
+
+test("preview: schema-driven fields render one labeled input per prop, pre-filled with defaults, and flow typed into preview", async () => {
+  const fakeApi = makeFakeApi({
+    uploadComponent: vi.fn().mockResolvedValue({ id: "c1", slug: "neon", status: "ready", propsSchema: PROPS_SCHEMA }),
+  });
+  render(<Authoring api={fakeApi} />);
+  await uploadAComponent();
+
+  const previewSection = (screen.getByRole("heading", { name: /^preview$/i }).closest("section")) as HTMLElement;
+
+  // No raw JSON textarea — a labeled field per prop instead, each pre-filled with its default.
+  expect(within(previewSection).queryByLabelText(/props \(json\)/i)).toBeNull();
+  expect((within(previewSection).getByLabelText("count") as HTMLInputElement).value).toBe("6");
+  expect((within(previewSection).getByLabelText("speed") as HTMLInputElement).value).toBe("1");
+  expect((within(previewSection).getByLabelText("color") as HTMLInputElement).value).toBe("#ffffff");
+  // array-of-primitive default shows as a comma-separated list.
+  expect((within(previewSection).getByLabelText("colors") as HTMLInputElement).value).toBe("#f39c12, #e74c3c");
+  // required prop with no default renders empty.
+  expect((within(previewSection).getByLabelText("text") as HTMLInputElement).value).toBe("");
+
+  // Editing a field and previewing flows values to the API, typed (numbers as numbers, arrays as arrays).
+  fireEvent.change(within(previewSection).getByLabelText("text"), { target: { value: "Promo" } });
+  fireEvent.change(screen.getByLabelText("base video"), { target: { value: "/assets/standard.mp4" } });
+  fireEvent.click(screen.getByRole("button", { name: /^preview$/i }));
+
+  await waitFor(() => expect(fakeApi.preview).toHaveBeenCalled());
+  const [compId, props, base] = (fakeApi.preview as ReturnType<typeof vi.fn>).mock.calls[0];
+  expect(compId).toBe("c1");
+  expect(base).toBe("/assets/standard.mp4");
+  expect(props).toMatchObject({ count: 6, speed: 1, color: "#ffffff", colors: ["#f39c12", "#e74c3c"], text: "Promo" });
+});
+
+test("create ad: selecting a component renders its schema fields pre-filled and flows typed default_props into createAd", async () => {
+  const fakeApi = makeFakeApi({
+    listComponents: vi.fn().mockResolvedValue([{ id: "c1", slug: "neon", status: "ready", props_schema: PROPS_SCHEMA }]),
+  });
+  render(<Authoring api={fakeApi} />);
+
+  const createSection = (await screen.findByRole("heading", { name: /create ad/i })).closest("section") as HTMLElement;
+
+  // Selecting the component replaces the Default props (JSON) textarea with schema-driven fields.
+  fireEvent.change(within(createSection).getByLabelText("component"), { target: { value: "c1" } });
+
+  expect(within(createSection).queryByLabelText(/default props \(json\)/i)).toBeNull();
+  expect((within(createSection).getByLabelText("count") as HTMLInputElement).value).toBe("6");
+  expect((within(createSection).getByLabelText("colors") as HTMLInputElement).value).toBe("#f39c12, #e74c3c");
+  expect((within(createSection).getByLabelText("text") as HTMLInputElement).value).toBe("");
+
+  fireEvent.change(within(createSection).getByLabelText("text"), { target: { value: "Hi" } });
+  fireEvent.change(within(createSection).getByLabelText("ad base video"), { target: { value: "/assets/standard.mp4" } });
+  fireEvent.click(within(createSection).getByRole("button", { name: /create ad/i }));
+
+  await waitFor(() => expect(fakeApi.createAd).toHaveBeenCalled());
+  const arg = (fakeApi.createAd as ReturnType<typeof vi.fn>).mock.calls[0][0];
+  expect(arg.default_props).toMatchObject({ count: 6, speed: 1, color: "#ffffff", colors: ["#f39c12", "#e74c3c"], text: "Hi" });
 });
 
 test("help panel is hidden by default", () => {
