@@ -331,8 +331,10 @@ export function Authoring({ api }: { api: Api }) {
   // When the selected component changes, pre-fill its default-prop fields (or clear when no schema).
   useEffect(() => {
     setAdPropValues(adSchemaProps ? schemaDefaults(adSchemaProps) : {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adForm.component_id, components]);
+    // Depend on the selected component's schema (stable across unrelated component-list edits like
+    // a delete), NOT the whole `components` array — otherwise deleting any component wipes in-progress
+    // ad prop edits (#21).
+  }, [adForm.component_id, adSchemaProps]);
 
   return (
     <div style={{ fontFamily: "monospace", padding: 16, background: "#111", color: "#eee", minHeight: "100vh" }}>
