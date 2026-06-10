@@ -343,6 +343,45 @@ test("create ad: a component without a parseable schema falls back to the JSON t
   expect(within(sec).getByLabelText(/default props \(json\)/i)).toBeInTheDocument();
 });
 
+test("create ad: deleting an unrelated component preserves in-progress ad prop edits", async () => {
+  const fakeApi = makeFakeApi({
+    listComponents: vi.fn().mockResolvedValue([
+      {
+        id: "c1",
+        slug: "labelled",
+        status: "ready",
+        props_schema: { type: "object", properties: { label: { type: "string", default: "hello" } } },
+      },
+      { id: "c2", slug: "unrelated", status: "ready", props_schema: {} },
+    ]),
+  });
+  render(<Authoring api={fakeApi} />);
+
+  // Select c1 in Create Ad so its schema field renders pre-filled with the default.
+  fireEvent.change(await screen.findByLabelText("ad component"), { target: { value: "c1" } });
+  const sec = createAdSection();
+  const field = within(sec).getByLabelText(/label \(string\)/i) as HTMLInputElement;
+  expect(field.value).toBe("hello");
+
+  // User edits the field — adPropValues now holds an in-progress edit.
+  fireEvent.change(field, { target: { value: "EDITED" } });
+  expect(field.value).toBe("EDITED");
+
+  // Delete the UNRELATED component c2 from the Components list.
+  const compSection = screen.getByText(/Components \(/).closest("section") as HTMLElement;
+  const c2Item = within(compSection).getByText(/unrelated/).closest("li") as HTMLElement;
+  fireEvent.click(within(c2Item).getByRole("button", { name: /delete/i }));
+
+  await waitFor(() => {
+    expect(fakeApi.deleteComponent).toHaveBeenCalledWith("c2");
+    expect(within(compSection).queryByText(/unrelated/)).not.toBeInTheDocument();
+  });
+
+  // The in-progress edit must survive deleting an unrelated component.
+  const fieldAfter = within(createAdSection()).getByLabelText(/label \(string\)/i) as HTMLInputElement;
+  expect(fieldAfter.value).toBe("EDITED");
+});
+
 test("uploads component and shows status", async () => {
   const fakeApi = makeFakeApi();
   render(<Authoring api={fakeApi} />);
