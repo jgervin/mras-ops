@@ -48,8 +48,8 @@ function coerceProps(properties: SchemaProperties, raw: Record<string, string>):
   const out: Record<string, unknown> = {};
   for (const [key, p] of Object.entries(properties)) {
     const v = raw[key] ?? "";
-    if (p.type === "boolean") { out[key] = v === "true"; continue; }
     if (v === "") continue;
+    if (p.type === "boolean") { out[key] = v === "true"; continue; }
     if (p.type === "number" || p.type === "integer") {
       const n = Number(v);
       if (!Number.isNaN(n)) out[key] = n;
