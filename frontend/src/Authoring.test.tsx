@@ -5,7 +5,7 @@ import type { Api } from "./api";
 
 function makeFakeApi(overrides: Partial<Api> = {}): Api {
   return {
-    uploadComponent: vi.fn().mockResolvedValue({ id: "c1", slug: "neon", status: "ready", propsSchema: {} }),
+    uploadComponent: vi.fn().mockResolvedValue({ id: "c1", slug: "neon", status: "ready", props_schema: {} }),
     listComponents: vi.fn().mockResolvedValue([]),
     listAds: vi.fn().mockResolvedValue([]),
     listBaseVideos: vi.fn().mockResolvedValue(["/assets/standard.mp4", "/assets/standard2.mp4"]),
@@ -134,7 +134,7 @@ test("deleting an ad calls the API and removes it from the list", async () => {
 test("deleting a component calls the API and removes it from the list", async () => {
   const fakeApi = makeFakeApi({
     listComponents: vi.fn().mockResolvedValue([
-      { id: "c1", slug: "snowy", status: "ready", propsSchema: {} },
+      { id: "c1", slug: "snowy", status: "ready", props_schema: {} },
     ]),
   });
   render(<Authoring api={fakeApi} />);
@@ -153,7 +153,7 @@ test("deleting a component calls the API and removes it from the list", async ()
 test("a failed component delete surfaces the error in the Components section (not buried under Ads)", async () => {
   const fakeApi = makeFakeApi({
     listComponents: vi.fn().mockResolvedValue([
-      { id: "c1", slug: "snowy", status: "ready", propsSchema: {} },
+      { id: "c1", slug: "snowy", status: "ready", props_schema: {} },
     ]),
     deleteComponent: vi
       .fn()
@@ -220,7 +220,7 @@ function createAdSection() {
 
 test("preview: schema-driven fields render labeled (name + type), pre-filled with each prop's default", async () => {
   const fakeApi = makeFakeApi({
-    uploadComponent: vi.fn().mockResolvedValue({ id: "c1", slug: "fish", status: "ready", propsSchema: SCHEMA }),
+    uploadComponent: vi.fn().mockResolvedValue({ id: "c1", slug: "fish", status: "ready", props_schema: SCHEMA }),
   });
   render(<Authoring api={fakeApi} />);
   await uploadAComponent();
@@ -244,7 +244,7 @@ test("preview: schema-driven fields render labeled (name + type), pre-filled wit
 
 test("preview: edited + defaulted fields flow as correctly-typed props into the preview call", async () => {
   const fakeApi = makeFakeApi({
-    uploadComponent: vi.fn().mockResolvedValue({ id: "c1", slug: "fish", status: "ready", propsSchema: SCHEMA }),
+    uploadComponent: vi.fn().mockResolvedValue({ id: "c1", slug: "fish", status: "ready", props_schema: SCHEMA }),
   });
   render(<Authoring api={fakeApi} />);
   await uploadAComponent();
@@ -273,7 +273,7 @@ test("preview: edited + defaulted fields flow as correctly-typed props into the 
 
 test("create ad: selecting a schema component renders default-filled fields; values flow to createAd", async () => {
   const fakeApi = makeFakeApi({
-    // NOTE: GET /components returns snake_case `props_schema` (the upload response is camelCase).
+    // NOTE: both POST /components (upload) and GET /components (list) return snake_case `props_schema`.
     listComponents: vi.fn().mockResolvedValue([
       { id: "c1", slug: "fish", status: "ready", props_schema: SCHEMA },
     ]),
