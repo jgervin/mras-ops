@@ -271,6 +271,36 @@ test("preview: edited + defaulted fields flow as correctly-typed props into the 
   });
 });
 
+test("preview: an untouched boolean prop is omitted so the component's own default applies", async () => {
+  // A boolean prop with NO schema default. Like every other optional field, an untouched
+  // boolean must be OMITTED so the component falls back to its own zod default — not forced
+  // to `false`. `label` (string with a default) is included so the form has a sane field.
+  const BOOL_SCHEMA = {
+    type: "object",
+    properties: {
+      loop: { type: "boolean" },
+      label: { type: "string", default: "hi" },
+    },
+  };
+  const fakeApi = makeFakeApi({
+    uploadComponent: vi.fn().mockResolvedValue({ id: "c1", slug: "fish", status: "ready", props_schema: BOOL_SCHEMA }),
+  });
+  render(<Authoring api={fakeApi} />);
+  await uploadAComponent();
+  const sec = previewSection();
+
+  // Do NOT touch the `loop` checkbox.
+  fireEvent.change(screen.getByLabelText("base video"), { target: { value: "/assets/standard.mp4" } });
+  fireEvent.click(within(sec).getByRole("button", { name: /^preview/i }));
+
+  await waitFor(() => expect(fakeApi.preview).toHaveBeenCalled());
+  const [, props] = (fakeApi.preview as ReturnType<typeof vi.fn>).mock.calls[0];
+  // The untouched boolean must not be sent at all (so the component's own default applies).
+  expect(props).not.toHaveProperty("loop");
+  // The defaulted string is present.
+  expect(props.label).toBe("hi");
+});
+
 test("create ad: selecting a schema component renders default-filled fields; values flow to createAd", async () => {
   const fakeApi = makeFakeApi({
     // NOTE: both POST /components (upload) and GET /components (list) return snake_case `props_schema`.
