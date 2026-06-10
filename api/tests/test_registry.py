@@ -77,7 +77,7 @@ def test_upload_component_returns_db_uuid_not_composition_id(monkeypatch):
     body = resp.json()
     assert body["id"] == db_uuid          # DB UUID, NOT the sidecar's "comp-neon"
     assert body["slug"] == "neon"
-    assert body["propsSchema"] == {"x": 1}
+    assert body["props_schema"] == {"x": 1}
     mock_http_instance.post.assert_awaited_once()
     fake_pool.fetchrow.assert_awaited_once()
 
