@@ -19,8 +19,8 @@ type SchemaProperties = Record<string, JsonSchemaProperty>;
 
 const PRIMITIVE_TYPES = new Set(["string", "number", "integer", "boolean", "array"]);
 
-// Pull a schema's renderable `properties` (or null when none parse). Accepts either the camelCase
-// `propsSchema` from POST /components or the snake_case `props_schema` from GET /components.
+// Pull a schema's renderable `properties` (or null when none parse). Takes the snake_case
+// `props_schema` ops-api returns from both POST and GET /components.
 function schemaPropertiesOf(propsSchema: unknown): SchemaProperties | null {
   const props = (propsSchema as { properties?: SchemaProperties } | undefined)?.properties;
   return props && Object.keys(props).length > 0 ? props : null;
@@ -145,7 +145,7 @@ export function Authoring({ api }: { api: Api }) {
   const [name, setName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [uploadResult, setUploadResult] = useState<{ status: string; id?: string; error?: string; propsSchema?: Record<string, unknown> } | null>(null);
+  const [uploadResult, setUploadResult] = useState<{ status: string; id?: string; error?: string; props_schema?: Record<string, unknown> } | null>(null);
   const [uploading, setUploading] = useState(false);
 
   // --- preview state ---
@@ -255,7 +255,7 @@ export function Authoring({ api }: { api: Api }) {
       const result = await api.uploadComponent(name, file);
       setUploadResult(result);
       // Pre-fill the schema-driven fields with each prop's default (empty when no schema).
-      const props = schemaPropertiesOf(result.propsSchema);
+      const props = schemaPropertiesOf(result.props_schema);
       setPropValues(props ? schemaDefaults(props) : {});
       if (fileRef.current) fileRef.current.value = "";
     } catch (e) {
@@ -267,7 +267,7 @@ export function Authoring({ api }: { api: Api }) {
 
   async function handlePreview() {
     if (!uploadResult?.id) return;
-    const previewSchema = schemaPropertiesOf(uploadResult.propsSchema);
+    const previewSchema = schemaPropertiesOf(uploadResult.props_schema);
     let props: Record<string, unknown>;
     if (previewSchema) {
       props = coerceProps(previewSchema, propValues);
@@ -319,12 +319,12 @@ export function Authoring({ api }: { api: Api }) {
   }
 
   // derive schema-driven prop fields for the just-uploaded component (Preview section)
-  const schemaProps = schemaPropertiesOf(uploadResult?.propsSchema);
-  const schemaRequired = requiredOf(uploadResult?.propsSchema);
+  const schemaProps = schemaPropertiesOf(uploadResult?.props_schema);
+  const schemaRequired = requiredOf(uploadResult?.props_schema);
 
   // derive schema-driven prop fields for the component selected in Create Ad
   const selectedComponent = components.find(c => c.id === adForm.component_id);
-  const adRawSchema = selectedComponent?.propsSchema ?? selectedComponent?.props_schema;
+  const adRawSchema = selectedComponent?.props_schema;
   const adSchemaProps = schemaPropertiesOf(adRawSchema);
   const adRequired = requiredOf(adRawSchema);
 

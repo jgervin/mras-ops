@@ -65,7 +65,7 @@ async def upload_component(name: str = Form(...), file: UploadFile = File(...)):
         "slug": body["slug"],
         "status": body["status"],
         "error": body.get("error"),
-        "propsSchema": body.get("propsSchema"),
+        "props_schema": body.get("propsSchema"),
     }
 
 
