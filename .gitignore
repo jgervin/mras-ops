@@ -14,3 +14,9 @@ out/
 
 # generated/preview clips (bind-mounted from the composer)
 output/
+
+# Ignore local Claude state (worktrees, personal settings) but track shared config
+.claude/*
+!.claude/agents/
+!.claude/hooks/
+!.claude/settings.json
