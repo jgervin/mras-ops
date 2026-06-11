@@ -23,6 +23,22 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  # Shared cooldown store (T1): transient flags only, every key TTL'd — no
+  # volume on purpose; losing it costs at most one repeated ad per person.
+  # Durable play history (dashboard/billing/proof) lives in postgres `events`.
+  # Port published to the host so NATIVE vision (macOS camera path) reaches it.
+  redis:
+    image: redis:7-alpine
+    ports:
+      # Loopback-only: native vision needs localhost, and an unauthenticated
+      # Redis must not be reachable from venue Wi-Fi.
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   mras-vision:
     profiles: ["docker-vision"]  # excluded from default 'docker compose up'; run natively on macOS (no camera passthrough in Docker)
     build: ../mras-vision
@@ -36,10 +52,15 @@ services:
       FRAME_SAMPLE_RATE: ${FRAME_SAMPLE_RATE:-5}
       CONFIDENCE_THRESHOLD: ${CONFIDENCE_THRESHOLD:-0.68}
       SCREEN_ID: ${SCREEN_ID:-screen_0}
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
       qdrant:
+        condition: service_started
+      # service_started (not healthy) is enough: the resolver falls back to
+      # its in-memory cooldown whenever Redis is unreachable.
+      redis:
         condition: service_started
     command: uvicorn main:app --host 0.0.0.0 --port 8001
 

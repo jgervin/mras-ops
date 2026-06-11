@@ -48,6 +48,9 @@ source "$ENV_FILE"
 set +a
 
 export CAM_INDEX="${CAM_INDEX:-0}"
+# Shared cooldown store (T1) — the compose stack publishes redis on the host.
+# Safe when redis is down: the resolver falls back to its in-memory cooldown.
+export REDIS_URL="${REDIS_URL:-redis://localhost:6379/0}"
 
 echo "Python: $("$PYTHON" -c 'import platform,sys; print(platform.machine(), sys.version)')"
 echo "  postgres : ${DATABASE_URL}"
