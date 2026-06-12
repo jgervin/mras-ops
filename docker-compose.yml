@@ -102,6 +102,9 @@ services:
       OVERLAY_PRESET: ${OVERLAY_PRESET:-turbulence-warp}
       OVERLAY_START_MS: ${OVERLAY_START_MS:-500}
       OVERLAY_DURATION_MS: ${OVERLAY_DURATION_MS:-2000}
+      # Overlay window as a fraction of the base clip (code default 0.5 =
+      # half the video). This demo rig runs full-length name overlays.
+      OVERLAY_DURATION_FRACTION: ${OVERLAY_DURATION_FRACTION:-1.0}
       OVERLAY_COLOR: "${OVERLAY_COLOR:-#ffffff}"
       OVERLAY_POSITION: ${OVERLAY_POSITION:-top}
     volumes:
