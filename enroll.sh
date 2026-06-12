@@ -42,7 +42,15 @@ for p in photos:
         sys.exit(f"photo not found: {p}")
     files.append(("photos", (path.name, path.read_bytes(), "image/jpeg")))
 
-r = httpx.post(os.environ["VISION_URL"] + "/enroll", files=files, timeout=120)
+url = os.environ["VISION_URL"]
+try:
+    r = httpx.post(url + "/enroll", files=files, timeout=120)
+except httpx.ConnectError:
+    sys.exit(
+        f"ERROR: vision service is not running at {url}.\n"
+        "Start it first:  cd /Users/jn/code/mras-ops && ./run-vision-native.sh\n"
+        "(or the full stack: ./start-mras.sh)"
+    )
 print(r.status_code, json.dumps(r.json(), indent=2))
 sys.exit(0 if r.status_code == 200 else 1)
 PY

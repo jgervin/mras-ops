@@ -27,14 +27,25 @@ import httpx
 name = os.environ["COMPOSE_NAME"]
 ops, composer = os.environ["OPS_API_URL"], os.environ["COMPOSER_URL"]
 
+
+def get(url, what):
+    try:
+        return httpx.get(url, timeout=30)
+    except httpx.ConnectError:
+        sys.exit(
+            f"ERROR: {what} is not running at {url}.\n"
+            "Start the stack first:  cd /Users/jn/code/mras-ops && ./start-mras.sh"
+        )
+
+
 components = [
-    c for c in httpx.get(f"{ops}/components", timeout=30).json()
+    c for c in get(f"{ops}/components", "ops-api").json()
     if c.get("status") == "ready"
 ]
 if not components:
     sys.exit("no ready components — upload one via the Authoring UI first")
 
-bases = httpx.get(f"{composer}/playlist", timeout=30).json()["videos"]
+bases = get(f"{composer}/playlist", "composer").json()["videos"]
 if not bases:
     sys.exit("no base videos in the pool")
 
@@ -51,11 +62,17 @@ text_prop = next(
 props = {text_prop: name} if text_prop else {}
 
 print(f"composing: {component['slug']} x {base_video} for {name!r}", file=sys.stderr)
-r = httpx.post(
-    f"{composer}/preview",
-    json={"component_id": component["id"], "props": props, "base_video": base_video},
-    timeout=180,
-)
+try:
+    r = httpx.post(
+        f"{composer}/preview",
+        json={"component_id": component["id"], "props": props, "base_video": base_video},
+        timeout=180,
+    )
+except httpx.ConnectError:
+    sys.exit(
+        f"ERROR: composer is not running at {composer}.\n"
+        "Start the stack first:  cd /Users/jn/code/mras-ops && ./start-mras.sh"
+    )
 body = r.json()
 if r.status_code != 200 or "error" in body:
     sys.exit(f"compose failed: {r.status_code} {json.dumps(body)}")
