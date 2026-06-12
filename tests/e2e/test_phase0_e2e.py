@@ -117,3 +117,51 @@ async def test_personalized_trigger_assembles_video_within_budget():
             f"Assembly took {elapsed:.2f}s, budget is {ASSEMBLE_BUDGET}s"
         )
         print(f"  video={len(video_resp.content)} bytes  latency={elapsed:.2f}s ✓")
+
+
+async def test_cleanup_removes_seeded_identity():
+    """Regression: the seeded test identity must be fully removable.
+
+    E2EPerson (seeded from the owner's face in tests/e2e/fixtures/test_face.jpg)
+    leaked into production: live recognition matched the owner against the
+    E2EPerson embedding and played ads addressed to "E2EPerson". The seeded
+    identity must be deletable from BOTH postgres and qdrant, and the session
+    fixture must invoke that cleanup even when tests fail.
+    """
+    # Resolve the helper before seeding anything, so a missing cleanup
+    # implementation fails this test without leaking a new identity.
+    cleanup = _cleanup_e2e_identity
+
+    assert FIXTURE.exists(), f"Missing fixture: {FIXTURE}"
+    async with httpx.AsyncClient(timeout=TIMEOUT) as http:
+        await _wait_healthy(http)
+
+        csv_buf = io.StringIO()
+        csv.writer(csv_buf).writerows([["name", "photo"], [PERSON_NAME, "test_face.jpg"]])
+        resp = await http.post(
+            f"{VISION}/enroll",
+            files={
+                "csv_file": ("enroll.csv", csv_buf.getvalue().encode(), "text/csv"),
+                "photos": ("test_face.jpg", FIXTURE.read_bytes(), "image/jpeg"),
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+        cleanup()
+
+        resp = await http.get(f"{VISION}/identity", params={"name": PERSON_NAME})
+        assert resp.status_code == 404, (
+            f"{PERSON_NAME} still in postgres after cleanup: {resp.text}"
+        )
+
+    scroll = httpx.post(
+        f"{QDRANT}/collections/{QDRANT_COLLECTION}/points/scroll",
+        json={
+            "filter": {"must": [{"key": "name", "match": {"value": PERSON_NAME}}]},
+            "limit": 10,
+            "with_payload": True,
+        },
+        timeout=10.0,
+    )
+    leftover = scroll.json()["result"]["points"]
+    assert leftover == [], f"{PERSON_NAME} points still in qdrant: {leftover}"
