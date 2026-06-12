@@ -8,6 +8,7 @@ Phase 0 end-to-end test. Requires docker compose up.
 import asyncio
 import csv
 import io
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -17,10 +18,49 @@ import pytest
 
 VISION = "http://localhost:8001"
 COMPOSER = "http://localhost:8002"
+QDRANT = "http://localhost:6333"
+QDRANT_COLLECTION = "mras_embeddings"
+PG_CONTAINER = "mras-ops-postgres-1"
 TIMEOUT = 30.0
 ASSEMBLE_BUDGET = 15.0
 FIXTURE = Path(__file__).parent / "fixtures" / "test_face.jpg"
 PERSON_NAME = "E2EPerson"
+
+
+def _cleanup_e2e_identity() -> None:
+    """Delete the seeded test identity from qdrant AND postgres.
+
+    The vision service has no DELETE endpoint, so this goes straight to the
+    stores the test stack already exposes (docker compose is a prerequisite
+    of this suite). Idempotent: safe to call when nothing is seeded.
+    """
+    httpx.post(
+        f"{QDRANT}/collections/{QDRANT_COLLECTION}/points/delete",
+        params={"wait": "true"},
+        json={"filter": {"must": [{"key": "name", "match": {"value": PERSON_NAME}}]}},
+        timeout=10.0,
+    ).raise_for_status()
+    subprocess.run(
+        [
+            "docker", "exec", PG_CONTAINER,
+            "psql", "-U", "mras", "-d", "mras",
+            "-c", f"DELETE FROM identities WHERE name = '{PERSON_NAME}'",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+@pytest.fixture(autouse=True, scope="session")
+def cleanup_seeded_identity():
+    """Guarantee the seeded identity never outlives the test session.
+
+    E2EPerson is enrolled from a real face photo; leaving it behind means
+    live recognition can match a real visitor against it and play ads
+    addressed to "E2EPerson" (this happened). Runs even if tests fail.
+    """
+    yield
+    _cleanup_e2e_identity()
 
 
 async def _wait_healthy(http: httpx.AsyncClient) -> None:
