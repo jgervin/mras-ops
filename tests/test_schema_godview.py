@@ -91,3 +91,14 @@ async def test_account_tables(schema_db):
     for absent in ("users", "roles", "permissions", "user_memberships"):
         assert not await _table_exists(schema_db, absent), f"{absent} must not exist"
     assert await _column_type(schema_db, "user_org_scopes", "user_id") == "uuid"
+
+
+async def test_physical_tables(schema_db):
+    for t in ("locations", "location_participants", "systems", "devices",
+              "cameras", "displays", "device_health_events", "system_health_events"):
+        assert await _table_exists(schema_db, t), f"missing {t}"
+    # Decision 10: runtime-string bridge lives on the device rows
+    assert await _column_type(schema_db, "cameras", "screen_id") == "text"
+    assert await _column_type(schema_db, "displays", "screen_id") == "text"
+    # self-referential location hierarchy
+    assert await _column_type(schema_db, "locations", "parent_location_id") == "uuid"
