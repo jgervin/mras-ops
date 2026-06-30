@@ -66,7 +66,7 @@ CREATE TABLE composition_runs (
 
 CREATE TABLE ad_runs (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    trigger_id  uuid,
+    trigger_id  uuid NOT NULL,
     organization_id uuid REFERENCES organizations(id),
     location_id uuid REFERENCES locations(id),
     system_id   uuid REFERENCES systems(id),
@@ -95,7 +95,7 @@ CREATE TABLE playbacks (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     ad_run_id   uuid REFERENCES ad_runs(id),
     composition_run_id uuid REFERENCES composition_runs(id),
-    trigger_id  uuid,
+    trigger_id  uuid NOT NULL,
     organization_id uuid REFERENCES organizations(id),
     location_id uuid REFERENCES locations(id),
     system_id   uuid REFERENCES systems(id),
@@ -113,6 +113,10 @@ CREATE TABLE viewer_exposures (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     ad_run_id   uuid NOT NULL REFERENCES ad_runs(id),
     playback_id uuid REFERENCES playbacks(id),
+    organization_id uuid REFERENCES organizations(id),
+    location_id uuid REFERENCES locations(id),
+    system_id   uuid REFERENCES systems(id),
+    display_id  uuid REFERENCES displays(id),
     subject_profile_id uuid REFERENCES subject_profiles(id),
     subject_observation_id uuid REFERENCES subject_observations(id),
     observation_track_id uuid REFERENCES observation_tracks(id),
@@ -128,3 +132,4 @@ CREATE TABLE viewer_exposures (
     created_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX viewer_exposures_ad_run_idx ON viewer_exposures (ad_run_id);
+CREATE INDEX viewer_exposures_system_idx ON viewer_exposures (system_id);

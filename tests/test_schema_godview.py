@@ -59,15 +59,18 @@ async def test_shared_enums_exist(schema_db):
     assert await _enum_values(schema_db, "playback_status") == [
         "dispatched", "started", "ended", "failed", "interrupted", "unknown",
     ]
-    assert "active" in await _enum_values(schema_db, "embedding_status")
+    assert await _enum_values(schema_db, "embedding_status") == ["pending", "active", "rejected", "expired", "deleted"]
     assert await _enum_values(schema_db, "embedding_type") == ["face"]
 
 
 async def test_role_label_enum_has_eight_canonical_roles(schema_db):
     roles = await _enum_values(schema_db, "role_label")
-    assert "Operator.SeniorSystemAdmin" in roles
-    assert "AgencyOfRecord.Standard" in roles
     assert len(roles) == 8
+    assert roles == [
+        "Customer.OptInIdentified", "Customer.Anonymous", "Customer.Blocklisted",
+        "Host.IT", "Advertiser.ReadOnly", "AgencyOfRecord.Standard",
+        "Operator.SystemAdmin", "Operator.SeniorSystemAdmin",
+    ]
 
 
 async def _table_exists(conn, name):
@@ -191,7 +194,7 @@ async def test_events_scope(schema_db):
     # Decision 8: events keeps an integer cursor, NOT a uuid PK
     assert await _column_type(schema_db, "events", "id") == "bigint"
     # Decision 2: first-class scope columns on the journal
-    for col in ("location_id", "system_id", "display_id", "camera_id",
+    for col in ("organization_id", "location_id", "system_id", "display_id", "camera_id",
                 "subject_profile_id", "ad_run_id"):
         assert await _column_type(schema_db, "events", col) == "uuid", f"events.{col} missing"
     assert await _fk_target(schema_db, "events", "system_id") == "systems"
@@ -216,3 +219,26 @@ async def test_feed_indexes(schema_db):
     assert "events_ad_run_idx" in ev
     assert "events_ts_desc_idx" in ev
     assert "events_trigger_id_idx" in ev
+    se = await _index_names(schema_db, "subject_embeddings")
+    assert "subject_embeddings_active_idx" in se
+
+
+async def test_summary_scope_columns(schema_db):
+    # Decision 2 / criterion 7.4: scope columns on every summary table
+    for t in ("ad_runs", "playbacks", "viewer_exposures", "subject_observations"):
+        assert await _column_type(schema_db, t, "system_id") == "uuid", f"{t}.system_id missing"
+        assert await _column_type(schema_db, t, "location_id") == "uuid", f"{t}.location_id missing"
+        assert await _fk_target(schema_db, t, "system_id") == "systems", f"{t}.system_id FK"
+    # display-bearing summary tables
+    for t in ("ad_runs", "playbacks", "viewer_exposures"):
+        assert await _column_type(schema_db, t, "display_id") == "uuid", f"{t}.display_id missing"
+    # observation is camera-scoped, not display-scoped
+    assert await _column_type(schema_db, "subject_observations", "camera_id") == "uuid"
+
+
+async def test_enum_rejects_invalid_value(schema_db):
+    import asyncpg
+    with pytest.raises(asyncpg.exceptions.DataError):
+        await schema_db.execute(
+            "INSERT INTO organizations (name, organization_type) VALUES ('x', 'bogus')"
+        )
