@@ -116,7 +116,7 @@ async def test_physical_tables(schema_db):
     assert await _column_type(schema_db, "locations", "parent_location_id") == "uuid"
 
 
-async def _has_unique(conn, table, cols):
+async def _has_unique(conn, table):
     rows = await conn.fetch(
         """
         SELECT array_agg(a.attname ORDER BY a.attnum) AS cols
@@ -142,3 +142,5 @@ async def test_people_tables(schema_db):
         assert not await _table_exists(schema_db, absent), f"{absent} must not exist"
     # Decision 5: embedding lifecycle gate for the reconciler
     assert await _column_type(schema_db, "subject_embeddings", "qdrant_point_id") == "text"
+    # Verify subject_observations has UNIQUE(event_id) constraint
+    assert ["event_id"] in await _has_unique(schema_db, "subject_observations")
