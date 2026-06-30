@@ -114,3 +114,31 @@ async def test_physical_tables(schema_db):
     assert await _column_is_nullable(schema_db, "cameras", "screen_id") is True     # nullable
     # self-referential location hierarchy
     assert await _column_type(schema_db, "locations", "parent_location_id") == "uuid"
+
+
+async def _has_unique(conn, table, cols):
+    rows = await conn.fetch(
+        """
+        SELECT array_agg(a.attname ORDER BY a.attnum) AS cols
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN unnest(c.conkey) AS k(attnum) ON true
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+        WHERE t.relname = $1 AND c.contype = 'u'
+        GROUP BY c.oid
+        """,
+        table,
+    )
+    return [sorted(r["cols"]) for r in rows]
+
+
+async def test_people_tables(schema_db):
+    for t in ("subject_profiles", "identity_enrollments", "subject_embeddings",
+              "subject_observations", "identity_matches", "observation_tracks",
+              "subject_profile_merges", "blocklist_entries"):
+        assert await _table_exists(schema_db, t), f"missing {t}"
+    # Decision 4: no legacy identity tables
+    for absent in ("identities", "identity_embeddings"):
+        assert not await _table_exists(schema_db, absent), f"{absent} must not exist"
+    # Decision 5: embedding lifecycle gate for the reconciler
+    assert await _column_type(schema_db, "subject_embeddings", "qdrant_point_id") == "text"
