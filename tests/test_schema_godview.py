@@ -184,3 +184,19 @@ async def test_idempotency_keys(schema_db):
     # Decision 3: projector replay-safety enforced by unique natural keys
     assert ["trigger_id"] in await _has_unique(schema_db, "ad_runs")
     assert ["display_id", "trigger_id"] in await _has_unique(schema_db, "playbacks")
+
+
+async def test_events_scope(schema_db):
+    assert await _table_exists(schema_db, "events")
+    # Decision 8: events keeps an integer cursor, NOT a uuid PK
+    assert await _column_type(schema_db, "events", "id") == "bigint"
+    # Decision 2: first-class scope columns on the journal
+    for col in ("location_id", "system_id", "display_id", "camera_id",
+                "subject_profile_id", "ad_run_id"):
+        assert await _column_type(schema_db, "events", col) == "uuid", f"events.{col} missing"
+    assert await _fk_target(schema_db, "events", "system_id") == "systems"
+
+
+async def test_legacy_absent(schema_db):
+    for absent in ("identities", "identity_embeddings", "users", "roles", "permissions"):
+        assert not await _table_exists(schema_db, absent), f"{absent} must not exist"
