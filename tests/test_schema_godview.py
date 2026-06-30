@@ -144,3 +144,28 @@ async def test_people_tables(schema_db):
     assert await _column_type(schema_db, "subject_embeddings", "qdrant_point_id") == "text"
     # Verify subject_observations has UNIQUE(event_id) constraint
     assert ["event_id"] in await _has_unique(schema_db, "subject_observations")
+
+
+async def _fk_target(conn, table, column):
+    return await conn.fetchval(
+        """
+        SELECT ccu.table_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name
+        JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name
+        WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = $1 AND kcu.column_name = $2
+        LIMIT 1
+        """,
+        table, column,
+    )
+
+
+async def test_creative_tables(schema_db):
+    for t in ("media_assets", "campaigns", "campaign_rules", "components",
+              "ads", "ad_creatives", "creative_approvals"):
+        assert await _table_exists(schema_db, t), f"missing {t}"
+    # old serial-id campaigns shell must be gone (Decision 6) — new one is uuid
+    assert await _column_type(schema_db, "campaigns", "id") == "uuid"
+    # deferred asset FK now resolved
+    assert await _fk_target(schema_db, "subject_profiles", "primary_photo_asset_id") == "media_assets"
+    assert await _fk_target(schema_db, "subject_embeddings", "source_asset_id") == "media_assets"
