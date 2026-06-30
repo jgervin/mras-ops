@@ -68,3 +68,26 @@ async def test_role_label_enum_has_eight_canonical_roles(schema_db):
     assert "Operator.SeniorSystemAdmin" in roles
     assert "AgencyOfRecord.Standard" in roles
     assert len(roles) == 8
+
+
+async def _table_exists(conn, name):
+    return await conn.fetchval(
+        "SELECT to_regclass($1) IS NOT NULL", "public." + name
+    )
+
+
+async def _column_type(conn, table, column):
+    return await conn.fetchval(
+        "SELECT data_type FROM information_schema.columns "
+        "WHERE table_name = $1 AND column_name = $2",
+        table, column,
+    )
+
+
+async def test_account_tables(schema_db):
+    for t in ("organizations", "organization_relationships", "user_org_scopes"):
+        assert await _table_exists(schema_db, t), f"missing {t}"
+    # RBAC collapsed to a thin scope map — no relational RBAC tables (Decision 1)
+    for absent in ("users", "roles", "permissions", "user_memberships"):
+        assert not await _table_exists(schema_db, absent), f"{absent} must not exist"
+    assert await _column_type(schema_db, "user_org_scopes", "user_id") == "uuid"
