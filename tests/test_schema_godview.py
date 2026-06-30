@@ -84,6 +84,15 @@ async def _column_type(conn, table, column):
     )
 
 
+async def _column_is_nullable(conn, table, column):
+    val = await conn.fetchval(
+        "SELECT is_nullable FROM information_schema.columns "
+        "WHERE table_name = $1 AND column_name = $2",
+        table, column,
+    )
+    return val == "YES"
+
+
 async def test_account_tables(schema_db):
     for t in ("organizations", "organization_relationships", "user_org_scopes"):
         assert await _table_exists(schema_db, t), f"missing {t}"
@@ -100,5 +109,8 @@ async def test_physical_tables(schema_db):
     # Decision 10: runtime-string bridge lives on the device rows
     assert await _column_type(schema_db, "cameras", "screen_id") == "text"
     assert await _column_type(schema_db, "displays", "screen_id") == "text"
+    # Decision 10 nullability rules: displays.screen_id NOT NULL, cameras.screen_id nullable
+    assert await _column_is_nullable(schema_db, "displays", "screen_id") is False  # NOT NULL
+    assert await _column_is_nullable(schema_db, "cameras", "screen_id") is True     # nullable
     # self-referential location hierarchy
     assert await _column_type(schema_db, "locations", "parent_location_id") == "uuid"
