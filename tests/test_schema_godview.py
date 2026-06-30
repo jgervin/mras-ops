@@ -200,3 +200,19 @@ async def test_events_scope(schema_db):
 async def test_legacy_absent(schema_db):
     for absent in ("identities", "identity_embeddings", "users", "roles", "permissions"):
         assert not await _table_exists(schema_db, absent), f"{absent} must not exist"
+
+
+async def _index_names(conn, table):
+    rows = await conn.fetch(
+        "SELECT indexname FROM pg_indexes WHERE tablename = $1", table
+    )
+    return {r["indexname"] for r in rows}
+
+
+async def test_feed_indexes(schema_db):
+    ev = await _index_names(schema_db, "events")
+    assert "events_system_ts_idx" in ev
+    assert "events_location_ts_idx" in ev
+    assert "events_ad_run_idx" in ev
+    assert "events_ts_desc_idx" in ev
+    assert "events_trigger_id_idx" in ev
