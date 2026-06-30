@@ -169,3 +169,18 @@ async def test_creative_tables(schema_db):
     # deferred asset FK now resolved
     assert await _fk_target(schema_db, "subject_profiles", "primary_photo_asset_id") == "media_assets"
     assert await _fk_target(schema_db, "subject_embeddings", "source_asset_id") == "media_assets"
+
+
+async def test_runs_tables(schema_db):
+    for t in ("personalization_decisions", "composition_runs", "ad_runs",
+              "playbacks", "viewer_exposures", "model_runs"):
+        assert await _table_exists(schema_db, t), f"missing {t}"
+    # Decision 12: target watch is a nullable bool; bystanders use probability
+    assert await _column_type(schema_db, "ad_runs", "target_watched") == "boolean"
+    assert await _column_type(schema_db, "viewer_exposures", "watch_probability") == "numeric"
+
+
+async def test_idempotency_keys(schema_db):
+    # Decision 3: projector replay-safety enforced by unique natural keys
+    assert ["trigger_id"] in await _has_unique(schema_db, "ad_runs")
+    assert ["display_id", "trigger_id"] in await _has_unique(schema_db, "playbacks")
