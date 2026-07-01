@@ -232,6 +232,16 @@ async def handle_decision(conn, env, scope):
 # ON CONFLICT (trigger_id)  [018].  status -> composition_status enum.
 # --------------------------------------------------------------------------- #
 async def handle_composition(conn, env, scope):
+    # FK-link (Part A): resolve the sibling decision by shared trigger_id. Events fold
+    # in ascending id order, so the decision/made row already exists here. N-variant
+    # decisions share a trigger_id — LIMIT 1 takes a REPRESENTATIVE link (acceptable
+    # for v1; a variant-exact link would need the decision's event_id on the wire).
+    pd_id = env.payload_get("personalization_decision_id")
+    if pd_id is None:
+        pd_id = await conn.fetchval(
+            "SELECT id FROM personalization_decisions WHERE trigger_id=$1 ORDER BY id LIMIT 1",
+            env.trigger_id,
+        )
     await conn.execute(
         """
         INSERT INTO composition_runs (
@@ -263,7 +273,7 @@ async def handle_composition(conn, env, scope):
         scope.organization_id,
         scope.location_id,
         scope.system_id,
-        env.payload_get("personalization_decision_id"),
+        pd_id,
         env.payload_get("ad_id"),
         env.payload_get("component_id"),
         env.payload_get("render_mode"),  # NULL when omitted -> COALESCE keeps prior value (no clobber)
@@ -285,6 +295,21 @@ async def handle_composition(conn, env, scope):
 # ON CONFLICT (trigger_id)  [015].  status -> ad_run_status enum.
 # --------------------------------------------------------------------------- #
 async def handle_ad_run(conn, env, scope):
+    # FK-link (Part A): resolve the sibling composition + decision by shared trigger_id.
+    # composition_runs is UNIQUE(trigger_id) — exact link. personalization_decisions is
+    # keyed per event, so N-variant decisions share the trigger_id — LIMIT 1 is the
+    # representative link (same v1 caveat as handle_composition).
+    comp_run_id = env.payload_get("composition_run_id")
+    if comp_run_id is None:
+        comp_run_id = await conn.fetchval(
+            "SELECT id FROM composition_runs WHERE trigger_id=$1", env.trigger_id
+        )
+    pd_id = env.payload_get("personalization_decision_id")
+    if pd_id is None:
+        pd_id = await conn.fetchval(
+            "SELECT id FROM personalization_decisions WHERE trigger_id=$1 ORDER BY id LIMIT 1",
+            env.trigger_id,
+        )
     ad_run_id = await conn.fetchval(
         """
         INSERT INTO ad_runs (
@@ -328,8 +353,8 @@ async def handle_ad_run(conn, env, scope):
         scope.display_id,
         env.payload_get("campaign_id"),
         env.payload_get("ad_id"),
-        env.payload_get("personalization_decision_id"),
-        env.payload_get("composition_run_id"),
+        pd_id,
+        comp_run_id,
         env.payload_get("target_subject_profile_id"),
         env.payload_get("personalization_type"),  # NULL when omitted -> COALESCE keeps prior value
         bool(env.payload_get("used_spoken_name", False)),
@@ -353,21 +378,34 @@ async def handle_ad_run(conn, env, scope):
 # ON CONFLICT (trigger_id, screen_id)  [021 rekey].  status -> playback_status.
 # --------------------------------------------------------------------------- #
 async def handle_playback(conn, env, scope):
-    ad_run_trigger_id = env.payload_get("ad_run_trigger_id")
+    # FK-link (Part A): resolve ad_run by SHARED trigger_id (the playback and its ad_run
+    # share the pipeline trigger). Honor an explicit ad_run_trigger_id when the relay
+    # stamps one; otherwise fall back to this playback's own trigger_id (previously left
+    # NULL). ad_runs is UNIQUE(trigger_id) — exact link.
+    lookup_trigger = env.payload_get("ad_run_trigger_id") or env.trigger_id
     ad_run_id = None
-    if ad_run_trigger_id is not None:
+    if lookup_trigger is not None:
         ad_run_id = await conn.fetchval(
-            "SELECT id FROM ad_runs WHERE trigger_id=$1", ad_run_trigger_id
+            "SELECT id FROM ad_runs WHERE trigger_id=$1", lookup_trigger
         )
-    await conn.execute(
+    # FK-link (Part A): resolve media_asset by ref -> media_assets.storage_url
+    # (contract 01: media_asset_ref is a "video filename/url"). NULL when no match.
+    media_asset_id = None
+    media_asset_ref = env.payload_get("media_asset_ref")
+    if media_asset_ref is not None:
+        media_asset_id = await conn.fetchval(
+            "SELECT id FROM media_assets WHERE storage_url=$1", media_asset_ref
+        )
+    playback_id = await conn.fetchval(
         """
         INSERT INTO playbacks (
-            trigger_id, screen_id, ad_run_id, organization_id, location_id, system_id,
+            trigger_id, screen_id, ad_run_id, media_asset_id, organization_id, location_id, system_id,
             display_id, status, dispatched_at, started_at, ended_at,
             duration_ms, error_code, error_message
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::text::timestamptz,$10::text::timestamptz,$11::text::timestamptz,$12,$13,$14)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::text::timestamptz,$11::text::timestamptz,$12::text::timestamptz,$13,$14,$15)
         ON CONFLICT (trigger_id, screen_id) DO UPDATE SET
             ad_run_id       = COALESCE(EXCLUDED.ad_run_id, playbacks.ad_run_id),
+            media_asset_id  = COALESCE(EXCLUDED.media_asset_id, playbacks.media_asset_id),
             organization_id = COALESCE(EXCLUDED.organization_id, playbacks.organization_id),
             location_id     = COALESCE(EXCLUDED.location_id, playbacks.location_id),
             system_id       = COALESCE(EXCLUDED.system_id, playbacks.system_id),
@@ -379,10 +417,12 @@ async def handle_playback(conn, env, scope):
             duration_ms     = COALESCE(EXCLUDED.duration_ms, playbacks.duration_ms),
             error_code      = COALESCE(EXCLUDED.error_code, playbacks.error_code),
             error_message   = COALESCE(EXCLUDED.error_message, playbacks.error_message)
+        RETURNING id
         """,
         env.trigger_id,
         env.screen_id,
         ad_run_id,
+        media_asset_id,
         scope.organization_id,
         scope.location_id,
         scope.system_id,
@@ -396,4 +436,6 @@ async def handle_playback(conn, env, scope):
         env.payload_get("error_message"),
     )
     # FIX 2: hand the resolved ad_run id back so the fold can back-stamp events.ad_run_id.
-    return {"ad_run_id": ad_run_id}
+    # Part B: also hand the playback id back so the fold can run the viewer_exposures
+    # derivation as a post-projection step once the window closes.
+    return {"ad_run_id": ad_run_id, "playback_id": playback_id}
