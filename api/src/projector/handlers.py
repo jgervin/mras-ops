@@ -16,6 +16,12 @@ savepoint and the fold routes the event to the ``projector.skip`` audit log.
 import json
 
 
+class ResolveMiss(Exception):
+    """A REQUIRED PARENT ROW the handler needs is absent (upstream data-completeness
+    gap, not a bad event). The fold audits this as ``projector.resolve_miss`` — a
+    distinct signal from ``projector.skip`` (poison/enum/malformed)."""
+
+
 def _jsonb(value):
     """Encode a Python value for a jsonb bind param; None -> SQL NULL (not JSON null)."""
     return None if value is None else json.dumps(value)
@@ -67,6 +73,7 @@ async def handle_detection(conn, env, scope):
         env.screen_id,
         env.payload_get("camera_track_id"),
     )
+    subject_profile_id = env.payload_get("uuid")  # matched subject_profile id, per contract
     await conn.execute(
         """
         INSERT INTO subject_observations (
@@ -104,7 +111,7 @@ async def handle_detection(conn, env, scope):
         track_id,
         env.payload_get("observed_at"),
         env.payload_get("detection_type"),
-        env.payload_get("uuid"),  # matched subject_profile id, per contract
+        subject_profile_id,
         env.payload_get("camera_track_id"),
         env.payload_get("confidence"),
         env.payload_get("match_status", "no_match"),
@@ -114,6 +121,8 @@ async def handle_detection(conn, env, scope):
         _jsonb(env.payload_get("mood_snapshot")),
         _jsonb(env.payload_get("attention_snapshot")),
     )
+    # FIX 2: hand the matched profile back so the fold can back-stamp events.subject_profile_id.
+    return {"subject_profile_id": subject_profile_id}
 
 
 # --------------------------------------------------------------------------- #
@@ -132,7 +141,7 @@ async def handle_identity_match(conn, env, scope):
             env.trigger_id,
         )
     if obs_id is None:
-        raise ValueError(
+        raise ResolveMiss(
             f"identity_match: no subject_observation for detection_event_id={det_event_id} "
             f"trigger_id={env.trigger_id}"
         )
@@ -230,7 +239,7 @@ async def handle_composition(conn, env, scope):
             personalization_decision_id, ad_id, component_id, render_mode, status,
             used_spoken_name, used_visible_name, used_likeness, used_voice_clone,
             render_progress, error_code, error_message, started_at, ended_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::text::timestamptz,$18::text::timestamptz)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8::render_mode,'prebuilt'),$9,$10,$11,$12,$13,$14,$15,$16,$17::text::timestamptz,$18::text::timestamptz)
         ON CONFLICT (trigger_id) DO UPDATE SET
             organization_id             = COALESCE(EXCLUDED.organization_id, composition_runs.organization_id),
             location_id                 = COALESCE(EXCLUDED.location_id, composition_runs.location_id),
@@ -238,7 +247,7 @@ async def handle_composition(conn, env, scope):
             personalization_decision_id = COALESCE(EXCLUDED.personalization_decision_id, composition_runs.personalization_decision_id),
             ad_id                       = COALESCE(EXCLUDED.ad_id, composition_runs.ad_id),
             component_id                = COALESCE(EXCLUDED.component_id, composition_runs.component_id),
-            render_mode                 = EXCLUDED.render_mode,
+            render_mode                 = COALESCE($8::render_mode, composition_runs.render_mode),
             status                      = EXCLUDED.status,
             used_spoken_name            = composition_runs.used_spoken_name OR EXCLUDED.used_spoken_name,
             used_visible_name           = composition_runs.used_visible_name OR EXCLUDED.used_visible_name,
@@ -257,7 +266,7 @@ async def handle_composition(conn, env, scope):
         env.payload_get("personalization_decision_id"),
         env.payload_get("ad_id"),
         env.payload_get("component_id"),
-        env.payload_get("render_mode", "prebuilt"),
+        env.payload_get("render_mode"),  # NULL when omitted -> COALESCE keeps prior value (no clobber)
         env.status,
         bool(env.payload_get("used_spoken_name", False)),
         bool(env.payload_get("used_visible_name", False)),
@@ -276,7 +285,7 @@ async def handle_composition(conn, env, scope):
 # ON CONFLICT (trigger_id)  [015].  status -> ad_run_status enum.
 # --------------------------------------------------------------------------- #
 async def handle_ad_run(conn, env, scope):
-    await conn.execute(
+    ad_run_id = await conn.fetchval(
         """
         INSERT INTO ad_runs (
             trigger_id, organization_id, location_id, system_id, display_id,
@@ -286,7 +295,7 @@ async def handle_ad_run(conn, env, scope):
             target_watch_probability, estimated_total_viewers,
             estimated_identified_viewers, estimated_anonymous_viewers,
             status, started_at, ended_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::text::timestamptz,$22::text::timestamptz)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11::personalization_type,'none'),$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::text::timestamptz,$22::text::timestamptz)
         ON CONFLICT (trigger_id) DO UPDATE SET
             organization_id             = COALESCE(EXCLUDED.organization_id, ad_runs.organization_id),
             location_id                 = COALESCE(EXCLUDED.location_id, ad_runs.location_id),
@@ -297,7 +306,7 @@ async def handle_ad_run(conn, env, scope):
             personalization_decision_id = COALESCE(EXCLUDED.personalization_decision_id, ad_runs.personalization_decision_id),
             composition_run_id          = COALESCE(EXCLUDED.composition_run_id, ad_runs.composition_run_id),
             target_subject_profile_id   = COALESCE(EXCLUDED.target_subject_profile_id, ad_runs.target_subject_profile_id),
-            personalization_type        = EXCLUDED.personalization_type,
+            personalization_type        = COALESCE($11::personalization_type, ad_runs.personalization_type),
             used_spoken_name            = ad_runs.used_spoken_name OR EXCLUDED.used_spoken_name,
             used_visible_name           = ad_runs.used_visible_name OR EXCLUDED.used_visible_name,
             used_likeness               = ad_runs.used_likeness OR EXCLUDED.used_likeness,
@@ -310,6 +319,7 @@ async def handle_ad_run(conn, env, scope):
             started_at                  = COALESCE(EXCLUDED.started_at, ad_runs.started_at),
             ended_at                    = COALESCE(EXCLUDED.ended_at, ad_runs.ended_at),
             updated_at                  = now()
+        RETURNING id
         """,
         env.trigger_id,
         scope.organization_id,
@@ -321,7 +331,7 @@ async def handle_ad_run(conn, env, scope):
         env.payload_get("personalization_decision_id"),
         env.payload_get("composition_run_id"),
         env.payload_get("target_subject_profile_id"),
-        env.payload_get("personalization_type", "none"),
+        env.payload_get("personalization_type"),  # NULL when omitted -> COALESCE keeps prior value
         bool(env.payload_get("used_spoken_name", False)),
         bool(env.payload_get("used_visible_name", False)),
         bool(env.payload_get("used_likeness", False)),
@@ -334,6 +344,8 @@ async def handle_ad_run(conn, env, scope):
         env.payload_get("started_at"),
         env.payload_get("ended_at"),
     )
+    # FIX 2: hand the resolved ad_run id back so the fold can back-stamp events.ad_run_id.
+    return {"ad_run_id": ad_run_id}
 
 
 # --------------------------------------------------------------------------- #
@@ -383,3 +395,5 @@ async def handle_playback(conn, env, scope):
         env.payload_get("error_code"),
         env.payload_get("error_message"),
     )
+    # FIX 2: hand the resolved ad_run id back so the fold can back-stamp events.ad_run_id.
+    return {"ad_run_id": ad_run_id}
