@@ -83,7 +83,9 @@ async def fold_batch(conn, resolver, cfg) -> dict:
                     # viewer_exposures for it (co-scope × time-window join). Self-guards
                     # — a no-op until started_at AND ended_at are both present — and runs
                     # in the same per-event savepoint so it commits atomically with the fold.
-                    if extra and extra.get("playback_id") and env.status == "ended":
+                    # FIX 4: 'interrupted' is also a closed-window terminal playback
+                    # status — derive its exposures too, else they are silently dropped.
+                    if extra and extra.get("playback_id") and env.status in ("ended", "interrupted"):
                         await derive_viewer_exposures_for_playback(conn, extra["playback_id"])
             except ResolveMiss as exc:  # FIX 5: required parent row absent (data-completeness)
                 await _write_skip(conn, env, exc, cfg.projector_ver, action="projector.resolve_miss")

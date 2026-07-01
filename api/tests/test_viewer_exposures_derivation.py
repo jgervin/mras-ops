@@ -67,19 +67,21 @@ async def _seed(pool):
 
 
 async def _obs(pool, ids, *, system_id, observed_at, profile, match_status,
-               attention=None, mood=None, demographic=None):
+               attention=None, mood=None, demographic=None, trigger_id=None):
     # event_id left NULL (FK to events; UNIQUE treats NULLs as distinct) — these are
-    # synthetic observations, not folded from real events.
+    # synthetic observations, not folded from real events. trigger_id is the causal
+    # link the derivation uses to pick the ad_run's target observation (FIX 1).
     return await pool.fetchval(
         "INSERT INTO subject_observations (system_id, camera_id, observed_at, "
         "detection_type, subject_profile_id, match_status, attention_snapshot, mood_snapshot, "
-        "demographic_snapshot, identity_confidence) "
-        "VALUES ($1,$2,$3,'face',$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9) RETURNING id",
+        "demographic_snapshot, identity_confidence, trigger_id) "
+        "VALUES ($1,$2,$3,'face',$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10) RETURNING id",
         system_id, ids["cam"], observed_at, profile, match_status,
         json.dumps(attention) if attention is not None else None,
         json.dumps(mood) if mood is not None else None,
         json.dumps(demographic) if demographic is not None else None,
-        0.91 if match_status == "matched_known" else None)
+        0.91 if match_status == "matched_known" else None,
+        trigger_id)
 
 
 async def _run(pool, playback_id) -> int:
@@ -94,7 +96,8 @@ async def test_derivation_target_and_bystanders_in_window(projector_pool):
                           profile=ids["target"], match_status="matched_known",
                           attention={"attending": True, "attending_fraction": 0.9,
                                      "gaze_duration_ms": 5000, "visible_duration_ms": 8000},
-                          mood={"mood_label": "happy", "mood_confidence": 0.7})
+                          mood={"mood_label": "happy", "mood_confidence": 0.7},
+                          trigger_id=ids["tid"])  # FIX 1: target linked by trigger_id
     o_by = await _obs(projector_pool, ids, system_id=ids["sys"], observed_at=IN_WINDOW,
                       profile=ids["other"], match_status="matched_anonymous",
                       attention={"attending_fraction": 0.3})
@@ -188,6 +191,47 @@ async def test_derivation_deferred_when_window_open(projector_pool):
     assert total == 0
 
 
+async def test_target_is_the_pre_window_triggering_observation(projector_pool):
+    """FIX 1: the causal triggering detection fires BEFORE the ad plays, so its
+    observed_at is OUTSIDE [started_at, ended_at]. The target must still be selected
+    by trigger_id (unconditional of the window); in-window others are bystanders; the
+    target is not double-counted; out-of-window non-targets are excluded."""
+    ids = await _seed(projector_pool)
+    pre_window = W_START - timedelta(seconds=5)
+    # causal triggering observation: BEFORE the window, linked by trigger_id
+    o_target = await _obs(projector_pool, ids, system_id=ids["sys"], observed_at=pre_window,
+                          profile=ids["target"], match_status="matched_known",
+                          attention={"attending": True, "attending_fraction": 0.8},
+                          trigger_id=ids["tid"])
+    # in-window bystanders (no trigger link)
+    o_b1 = await _obs(projector_pool, ids, system_id=ids["sys"], observed_at=IN_WINDOW,
+                      profile=ids["other"], match_status="matched_anonymous",
+                      attention={"attending_fraction": 0.4})
+    o_b2 = await _obs(projector_pool, ids, system_id=ids["sys"], observed_at=W_END,
+                      profile=ids["other"], match_status="no_match")
+    # out-of-window non-target: excluded
+    await _obs(projector_pool, ids, system_id=ids["sys"], observed_at=OUT_WINDOW,
+               profile=ids["other"], match_status="no_match")
+
+    n = await _run(projector_pool, ids["playback"])
+
+    rows = await projector_pool.fetch(
+        "SELECT subject_observation_id, role FROM viewer_exposures WHERE ad_run_id=$1", ids["ad_run"])
+    by_role = {r["subject_observation_id"]: r["role"] for r in rows}
+    # a target row EXISTS for the PRE-WINDOW triggering observation
+    assert by_role.get(o_target) == "target"
+    # in-window others are bystanders
+    assert by_role.get(o_b1) == "bystander"
+    assert by_role.get(o_b2) == "bystander"
+    # the target is NOT double-counted as a bystander
+    target_rows = [r for r in rows if r["subject_observation_id"] == o_target]
+    assert len(target_rows) == 1
+    assert target_rows[0]["role"] == "target"
+    # out-of-window non-target excluded; total = 1 target + 2 bystanders
+    assert n == 3
+    assert len(rows) == 3
+
+
 # --------------------------------------------------------------------------- #
 # wiring: the fold triggers the derivation on playback/ended (post-projection)
 # --------------------------------------------------------------------------- #
@@ -250,3 +294,54 @@ async def test_fold_derives_viewer_exposure_on_playback_ended(projector_pool, de
     assert exp[0]["identity_status"] == "known"
     assert exp[0]["system_id"] == ids["sys"]
     assert exp[0]["display_id"] == disp
+
+
+async def test_fold_derives_viewer_exposure_on_playback_interrupted(projector_pool, dedicated_conn_factory):
+    """FIX 4: an INTERRUPTED playback is a closed-window terminal status. Its exposures
+    must derive exactly like an ended playback — otherwise interrupted-playback exposures
+    are silently dropped."""
+    ids = await _seed(projector_pool)
+    sfx = uuid.uuid4().hex[:8]
+    cam_screen = f"cam-int-{sfx}"
+    disp_screen = f"disp-int-{sfx}"
+    await projector_pool.execute(
+        "INSERT INTO cameras (system_id, screen_id, name) VALUES ($1,$2,'IntCam')",
+        ids["sys"], cam_screen)
+    disp = await projector_pool.fetchval(
+        "INSERT INTO displays (system_id, screen_id, name) VALUES ($1,$2,'IntDisp') RETURNING id",
+        ids["sys"], disp_screen)
+
+    fence = await projector_pool.fetchval("SELECT COALESCE(max(id),0) FROM events")
+    await projector_pool.execute("UPDATE projector_state SET cursor=$1 WHERE id=1", fence)
+
+    tid = str(uuid.uuid4())
+    cam_p = {"screen_id": cam_screen, "screen_kind": "camera"}
+    disp_p = {"screen_id": disp_screen, "screen_kind": "display"}
+
+    await _ins(projector_pool, "mras-vision", "detection", "success",
+               {**cam_p, "observed_at": "2026-07-01T12:00:15Z", "detection_type": "face",
+                "match_status": "matched_known", "confidence": 0.95,
+                "uuid": str(ids["target"])}, tid)
+    await _ins(projector_pool, "mras-composer", "ad_run", "planned",
+               {**disp_p, "personalization_type": "identity",
+                "target_subject_profile_id": str(ids["target"])}, tid)
+    await _ins(projector_pool, "mras-composer", "playback", "started",
+               {**disp_p, "started_at": "2026-07-01T12:00:00Z"}, tid)
+    await _ins(projector_pool, "mras-display", "playback", "interrupted",
+               {**disp_p, "started_at": "2026-07-01T12:00:00Z",
+                "ended_at": "2026-07-01T12:00:20Z", "duration_ms": 20000}, tid)
+
+    lock_conn = await dedicated_conn_factory()
+    worker = ProjectorWorker(projector_pool, lock_conn, CFG)
+    assert await worker.acquire_lock() is True
+    try:
+        await worker.drain()
+    finally:
+        await worker.release_lock()
+
+    ad_run = await projector_pool.fetchval("SELECT id FROM ad_runs WHERE trigger_id=$1", tid)
+    exp = await projector_pool.fetch(
+        "SELECT role, identity_status FROM viewer_exposures WHERE ad_run_id=$1", ad_run)
+    assert len(exp) == 1
+    assert exp[0]["role"] == "target"
+    assert exp[0]["identity_status"] == "known"

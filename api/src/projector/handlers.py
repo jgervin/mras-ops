@@ -393,8 +393,11 @@ async def handle_playback(conn, env, scope):
     media_asset_id = None
     media_asset_ref = env.payload_get("media_asset_ref")
     if media_asset_ref is not None:
+        # FIX 2 (DBA): storage_url has no UNIQUE, so a bare lookup is non-deterministic.
+        # ORDER BY created_at LIMIT 1 pins the first-created asset for a stable link.
         media_asset_id = await conn.fetchval(
-            "SELECT id FROM media_assets WHERE storage_url=$1", media_asset_ref
+            "SELECT id FROM media_assets WHERE storage_url=$1 ORDER BY created_at LIMIT 1",
+            media_asset_ref,
         )
     playback_id = await conn.fetchval(
         """
