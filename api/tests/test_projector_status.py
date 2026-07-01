@@ -9,6 +9,8 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from src.projector.config import ProjectorConfig
 from src.projector.status import get_projector_status
 
@@ -58,3 +60,11 @@ async def test_status_crit_when_lag_over_crit_threshold(projector_pool):
         st = await get_projector_status(conn, CFG)
     assert st["lag_seconds"] >= 60
     assert st["health"] == "crit"
+
+
+async def test_status_raises_when_projector_state_missing(projector_pool):
+    """FIX 1: missing projector_state row raises a clear RuntimeError, not a bare TypeError."""
+    await projector_pool.execute("DELETE FROM projector_state WHERE id=1")
+    with pytest.raises(RuntimeError, match="projector_state not initialized"):
+        async with projector_pool.acquire() as conn:
+            await get_projector_status(conn, CFG)

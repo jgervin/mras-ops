@@ -296,6 +296,13 @@ async def test_second_full_run_is_idempotent(projector_pool, dedicated_conn_fact
            (before["tracks"], before["obs"], before["matches"], before["decisions"],
             before["comps"], before["runs"], before["playbacks"])
 
+    # FIX 2: scope columns survive the clean replay — not NULLed by re-upsert
+    obs = await projector_pool.fetchrow(
+        "SELECT camera_id, organization_id FROM subject_observations WHERE event_id=$1",
+        ev["det_id"])
+    assert obs["camera_id"] == ids["cam"]
+    assert obs["organization_id"] == ids["org"]
+
     # no phantom skips on the clean replay
     skips = await projector_pool.fetchval(
         "SELECT count(*) FROM audit_logs WHERE action IN ('projector.skip','projector.resolve_miss') "

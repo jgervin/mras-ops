@@ -33,6 +33,10 @@ async def get_projector_status(conn, cfg) -> dict:
         WHERE ps.id = 1
         """
     )
+    if row is None:
+        raise RuntimeError(
+            "projector_state not initialized (migration 019 not applied)"
+        )
     cursor = row["cursor"]
     max_event_id = row["max_event_id"]
     lag_seconds = None if row["lag_seconds"] is None else float(row["lag_seconds"])

@@ -18,6 +18,7 @@ from src.projector.status import get_projector_status
 
 _db: asyncpg.Pool | None = None
 _SIDECAR_URL = os.getenv("OVERLAY_SIDECAR_URL", "http://mras-overlays:3000")
+# Thresholds read once at import/startup — changing them requires a service restart.
 _PROJECTOR_CFG = ProjectorConfig.from_env()
 
 
@@ -207,7 +208,10 @@ async def events_stream():
 async def projector_status():
     """God View projector health: cursor, backlog, lag, and ok/warn/crit level."""
     async with _db.acquire() as conn:
-        return await get_projector_status(conn, _PROJECTOR_CFG)
+        try:
+            return await get_projector_status(conn, _PROJECTOR_CFG)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
 
 
 @app.get("/health")

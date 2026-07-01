@@ -148,6 +148,7 @@ services:
       PROJECTOR_LAG_WARN_S: "10"
       PROJECTOR_LAG_CRIT_S: "60"
       PROJECTOR_SETTLE_MS: "2000"
+      PROJECTOR_ADVISORY_LOCK_KEY: "20260701"
     depends_on:
       postgres:
         condition: service_healthy
