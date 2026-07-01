@@ -32,13 +32,19 @@ _SELECT_BATCH = "SELECT * FROM events WHERE id > $1 ORDER BY id ASC LIMIT $2"
 
 
 async def fold_batch(conn, resolver, cfg) -> dict:
-    """Fold one batch. Returns {folded, skipped, cursor, batch}."""
+    """Fold one batch. Returns {folded, skipped, processed, cursor, batch}.
+
+    ``processed`` counts every consumed row (folded + skipped + unmapped no-ops).
+    It is the correct caught-up signal for drain(): a full page (processed ==
+    batch_size) means more backlog may exist; a partial page (processed <
+    batch_size) means we drained to the settle boundary or the end of the log.
+    """
     folded = skipped = 0
     async with conn.transaction():
         cursor = await read_cursor_for_update(conn)
         rows = await conn.fetch(_SELECT_BATCH, cursor, cfg.batch_size)
         if not rows:
-            return {"folded": 0, "skipped": 0, "cursor": cursor, "batch": 0}
+            return {"folded": 0, "skipped": 0, "processed": 0, "cursor": cursor, "batch": 0}
 
         # FIX 4: single settle boundary for the whole batch. Any event newer than
         # this is NOT yet settled — stop there and leave it (and every later event)
@@ -66,7 +72,11 @@ async def fold_batch(conn, resolver, cfg) -> dict:
                     # FIX 2: back-stamp AFTER the handler so handler-derived event-scope
                     # columns (subject_profile_id, ad_run_id) — and any FK target the
                     # handler just inserted — are stamped in the SAME savepoint txn.
-                    if has_scope:
+                    # Device-scope columns are stamped only when has_scope; derived
+                    # extras (subject_profile_id, ad_run_id) are stamped whenever the
+                    # handler produced them — the old `if has_scope:` gate conflated
+                    # the two concerns and silently dropped extras on scope-less events.
+                    if has_scope or extra:
                         await _backstamp(conn, env.id, scope, extra or {})
             except ResolveMiss as exc:  # FIX 5: required parent row absent (data-completeness)
                 await _write_skip(conn, env, exc, cfg.projector_ver, action="projector.resolve_miss")
@@ -78,7 +88,7 @@ async def fold_batch(conn, resolver, cfg) -> dict:
 
         if processed:
             await advance_cursor(conn, last_id, last_ts, cfg.projector_ver)
-        return {"folded": folded, "skipped": skipped, "cursor": last_id, "batch": len(rows)}
+        return {"folded": folded, "skipped": skipped, "processed": processed, "cursor": last_id, "batch": len(rows)}
 
 
 async def _backstamp(conn, event_id, scope, extra=None) -> None:

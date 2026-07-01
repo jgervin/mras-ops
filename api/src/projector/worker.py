@@ -61,13 +61,18 @@ class ProjectorWorker:
             return await fold_batch(conn, resolver, self._cfg)
 
     async def drain(self) -> None:
-        """Fold batches until caught up (a partial batch) or a stop is requested.
+        """Fold batches until caught up (a partial page) or a stop is requested.
 
-        A full batch (folded+skipped == batch_size) means more may be waiting, so
-        loop again immediately; anything less means we drained the backlog."""
+        A full page (res["processed"] == batch_size) means more backlog may exist,
+        so loop immediately.  A partial page (processed < batch_size) means we hit
+        the settle boundary or the end of the log — caught up, return.
+
+        ``processed`` counts every consumed row including unmapped no-ops.
+        folded+skipped would miss those, causing drain to idle after a page of
+        high-volume unmapped traffic even though more backlog remains."""
         while not self._stop.is_set():
             res = await self.fold_once()
-            if res["folded"] + res["skipped"] < self._cfg.batch_size:
+            if res["processed"] < self._cfg.batch_size:
                 return
 
     # --- lifecycle ----------------------------------------------------------

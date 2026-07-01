@@ -166,3 +166,73 @@ async def test_cancel_releases_lock(projector_pool, dedicated_conn_factory):
     assert worker.holds_lock is False
     assert await try_acquire(other, cfg.advisory_lock_key) is True
     await release(other, cfg.advisory_lock_key)
+
+
+# --------------------------------------------------------------------------- #
+# Fix 1 — drain "caught-up" signal must count rows CONSUMED (processed),
+#          not just folded+skipped.
+# --------------------------------------------------------------------------- #
+async def _ins_unmapped(pool):
+    """Insert an unmapped event (route() returns None → increments processed only)."""
+    ts = datetime.now(timezone.utc) - timedelta(seconds=30)
+    return await pool.fetchval(
+        "INSERT INTO events (trigger_id, ts, service, event_type, status, payload) "
+        "VALUES ($1,$2,'mras-vision','gaze','success','{}') RETURNING id",
+        str(uuid.uuid4()), ts,
+    )
+
+
+async def test_drain_continues_through_unmapped_heavy_pages(projector_pool, dedicated_conn_factory):
+    """Fix 1: drain must use res["processed"] (not folded+skipped) for caught-up signal.
+
+    A batch of mostly-unmapped events has folded+skipped < batch_size even when
+    processed == batch_size (a full page was consumed).  The old check exits early;
+    the fixed check keeps draining until a partial page is seen.
+    """
+    cfg = ProjectorConfig.from_env(_ENV)  # batch_size=2
+    await _seed_display(projector_pool)
+    conn = await dedicated_conn_factory()
+    worker = ProjectorWorker(projector_pool, conn, cfg)
+    assert await worker.acquire_lock() is True
+    try:
+        await _fence(projector_pool)
+        # 3 unmapped + 1 mapped = 4 events → two full batches of 2.
+        # OLD: batch 1: folded+skipped=0 < batch_size=2 → drain exits at cursor=fence+2.
+        # NEW: batch 1: processed=2 == batch_size=2 → keep draining; processes all 4.
+        u1 = await _ins_unmapped(projector_pool)
+        u2 = await _ins_unmapped(projector_pool)
+        u3 = await _ins_unmapped(projector_pool)
+        m1 = await _ins_ad_run(projector_pool)
+        expected_cursor = max(u1, u2, u3, m1)
+
+        await worker.drain()
+
+        cursor = await projector_pool.fetchval("SELECT cursor FROM projector_state WHERE id=1")
+        assert cursor == expected_cursor, (
+            f"drain stopped early at cursor={cursor}, expected {expected_cursor} "
+            "(all 4 events consumed); old folded+skipped check exits after the first "
+            "unmapped-only batch"
+        )
+    finally:
+        await worker.release_lock()
+
+
+async def test_drain_returns_on_empty_batch_no_busyspin(projector_pool, dedicated_conn_factory):
+    """Fix 1: fold_batch must expose 'processed' in its return dict.
+
+    Verifies the return dict has 'processed'==0 for an empty batch (no events),
+    and that drain() returns rather than spinning — guards the idle edge case.
+    """
+    cfg = ProjectorConfig.from_env(_ENV)
+    conn = await dedicated_conn_factory()
+    worker = ProjectorWorker(projector_pool, conn, cfg)
+    assert await worker.acquire_lock() is True
+    try:
+        await _fence(projector_pool)
+        # No events — drain must return (not spin) within a generous timeout.
+        await asyncio.wait_for(worker.drain(), timeout=1.0)
+        # fold_once on empty DB must return processed=0.
+        r = await worker.fold_once()
+        assert r["processed"] == 0
+    finally:
+        await worker.release_lock()
