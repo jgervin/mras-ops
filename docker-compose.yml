@@ -133,6 +133,27 @@ services:
       mras-overlays:
         condition: service_started
 
+  # God View projector ("librarian"): single-writer worker that folds the append-only
+  # `events` log into the summary tables. Shares the api image; overrides CMD to run the
+  # worker module instead of uvicorn. No inbound ports (lag/status is served by the api
+  # from the same DB). restart is safe because the worker drains + releases its advisory
+  # lock on SIGTERM (graceful shutdown in src/projector/worker.py).
+  mras-ops-projector:
+    build: ./api
+    command: python -m src.projector
+    environment:
+      DATABASE_URL: postgresql://mras:mras@postgres:5432/mras
+      PROJECTOR_POLL_MS: "1000"
+      PROJECTOR_BATCH_SIZE: "500"
+      PROJECTOR_LAG_WARN_S: "10"
+      PROJECTOR_LAG_CRIT_S: "60"
+      PROJECTOR_SETTLE_MS: "2000"
+      PROJECTOR_ADVISORY_LOCK_KEY: "20260701"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   mras-ops-frontend:
     # Frontend reaches ops-api (8080) and composer (8002) from the BROWSER via host-published ports.
     # api.ts defaults to http://localhost:8080 / http://localhost:8002 — correct for local demo.
