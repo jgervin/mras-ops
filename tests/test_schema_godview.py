@@ -242,3 +242,24 @@ async def test_enum_rejects_invalid_value(schema_db):
         await schema_db.execute(
             "INSERT INTO organizations (name, organization_type) VALUES ('x', 'bogus')"
         )
+
+
+async def test_projector_idempotency_keys(schema_db):
+    # 018: natural unique keys on the 5 projector-written tables + NOT NULL discriminators
+    # observation_tracks: keyed on the RAW camera screen_id string (not the resolved uuid)
+    assert await _column_type(schema_db, "observation_tracks", "camera_screen_id") == "text"
+    assert await _column_is_nullable(schema_db, "observation_tracks", "camera_screen_id") is False
+    assert await _column_is_nullable(schema_db, "observation_tracks", "camera_track_id") is False
+    assert ["camera_screen_id", "camera_track_id"] in await _has_unique(schema_db, "observation_tracks")
+    # identity_matches: N ranked candidates per observation
+    assert await _column_is_nullable(schema_db, "identity_matches", "rank") is False
+    assert ["rank", "subject_observation_id"] in await _has_unique(schema_db, "identity_matches")
+    # personalization_decisions: one decision per source event
+    assert await _column_is_nullable(schema_db, "personalization_decisions", "event_id") is False
+    assert ["event_id"] in await _has_unique(schema_db, "personalization_decisions")
+    # composition_runs: one composition per trigger
+    assert await _column_is_nullable(schema_db, "composition_runs", "trigger_id") is False
+    assert ["trigger_id"] in await _has_unique(schema_db, "composition_runs")
+    # viewer_exposures: one exposure per (ad_run, observed viewer)
+    assert await _column_is_nullable(schema_db, "viewer_exposures", "subject_observation_id") is False
+    assert ["ad_run_id", "subject_observation_id"] in await _has_unique(schema_db, "viewer_exposures")
