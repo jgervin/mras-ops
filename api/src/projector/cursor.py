@@ -17,7 +17,7 @@ async def advance_cursor(conn, new_cursor: int, last_event_ts, projector_ver: st
     await conn.execute(
         "UPDATE projector_state "
         "SET cursor = $1, last_event_ts = $2, updated_at = now(), projector_ver = $3 "
-        "WHERE id = 1",
+        "WHERE id = 1 AND cursor < $1",
         new_cursor,
         last_event_ts,
         projector_ver,

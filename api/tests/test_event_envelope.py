@@ -63,9 +63,10 @@ def test_business_fields_via_payload_get_with_default():
 
 def test_none_payload_defaults_to_empty_dict():
     env = EventEnvelope.from_row(_raw_row(payload=None))
-    assert env.payload == {}
+    # payload is private; verify behavior through the public accessors
     assert env.screen_id is None
     assert env.payload_get("anything", 7) == 7
+    assert env.payload_get("anything") is None
 
 
 def test_payload_accepts_json_string_from_asyncpg():

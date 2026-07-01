@@ -116,3 +116,29 @@ async def test_resolve_never_raises_on_unknown(projector_pool):
     # must not raise even though the device is unregistered
     scope = await r.resolve("totally-unknown", "display")
     assert scope == NULL_SCOPE
+
+
+async def test_unresolved_conflict_refreshes_event_id(projector_pool):
+    """ON CONFLICT must update event_id to the most-recent unresolved event.
+
+    Insert two real events (to satisfy the FK), then call resolve twice with
+    ttl=0 so each call hits the DB.  After the second call: seen_count==2 and
+    event_id must equal the second (newer) event's id.
+    """
+    await _seed(projector_pool)
+    eid_a = await projector_pool.fetchval(
+        "INSERT INTO events (trigger_id, service, event_type, status) "
+        "VALUES (gen_random_uuid(),'test','test','test') RETURNING id"
+    )
+    eid_b = await projector_pool.fetchval(
+        "INSERT INTO events (trigger_id, service, event_type, status) "
+        "VALUES (gen_random_uuid(),'test','test','test') RETURNING id"
+    )
+    r = ScopeResolver(projector_pool, ttl_seconds=0)
+    await r.resolve("screen_evtid_refresh", "camera", event_id=eid_a)
+    await r.resolve("screen_evtid_refresh", "camera", event_id=eid_b)
+    row = await projector_pool.fetchrow(
+        "SELECT event_id, seen_count FROM unresolved_devices WHERE screen_id='screen_evtid_refresh'"
+    )
+    assert row["seen_count"] == 2
+    assert row["event_id"] == eid_b  # must be refreshed to the most-recent event

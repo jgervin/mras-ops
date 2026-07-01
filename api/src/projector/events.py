@@ -28,7 +28,7 @@ class EventEnvelope:
     service: str
     event_type: str
     status: str
-    payload: dict
+    _payload: dict
     asset_ref: str | None = None
 
     @classmethod
@@ -45,7 +45,7 @@ class EventEnvelope:
             service=_get(row, "service"),
             event_type=_get(row, "event_type"),
             status=_get(row, "status"),
-            payload=payload,
+            _payload=payload,
             asset_ref=_get(row, "asset_ref"),
         )
 
@@ -55,13 +55,14 @@ class EventEnvelope:
         return (self.service, self.event_type, self.status)
 
     def payload_get(self, key, default=None):
-        return self.payload.get(key, default)
+        """Sole public accessor for payload fields (payload field is private)."""
+        return self._payload.get(key, default)
 
     # --- scope inputs (payload-only; typed columns are NULL on the wire) ---
     @property
     def screen_id(self):
-        return self.payload.get("screen_id")
+        return self._payload.get("screen_id")
 
     @property
     def screen_kind(self):
-        return self.payload.get("screen_kind")
+        return self._payload.get("screen_kind")

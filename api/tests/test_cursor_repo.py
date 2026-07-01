@@ -68,3 +68,31 @@ async def test_advance_and_upsert_share_one_txn_rollback(projector_pool):
     assert await projector_pool.fetchval(
         "SELECT count(*) FROM unresolved_devices WHERE screen_id='rollback-screen'"
     ) == 0
+
+
+async def test_advance_cursor_forward_only_guard(projector_pool):
+    """advance_cursor must never move the cursor backward (DBA forward-only guard).
+
+    Seed cursor=100, attempt backward advance to 50 → must stay 100 (guard holds).
+    Then advance forward to 150 → must succeed.
+    """
+    await projector_pool.execute("UPDATE projector_state SET cursor=100 WHERE id=1")
+    # Backward attempt: should be a no-op
+    async with projector_pool.acquire() as conn:
+        async with conn.transaction():
+            await advance_cursor(conn, 50, _TS, "backward-attempt")
+    after_backward = await projector_pool.fetchval(
+        "SELECT cursor FROM projector_state WHERE id=1"
+    )
+    assert after_backward == 100, (
+        f"Forward-only guard failed: cursor moved backward to {after_backward}"
+    )
+    # Forward advance: should succeed
+    async with projector_pool.acquire() as conn:
+        async with conn.transaction():
+            await advance_cursor(conn, 150, _TS, "forward-ok")
+    after_forward = await projector_pool.fetchval(
+        "SELECT cursor FROM projector_state WHERE id=1"
+    )
+    assert after_forward == 150
+    await _reset(projector_pool)

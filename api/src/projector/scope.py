@@ -90,7 +90,8 @@ class ScopeResolver:
         await self._db.execute(
             "INSERT INTO unresolved_devices (screen_id, kind, event_id) VALUES ($1, $2, $3) "
             "ON CONFLICT (screen_id, kind) "
-            "DO UPDATE SET last_seen_at = now(), seen_count = unresolved_devices.seen_count + 1",
+            "DO UPDATE SET last_seen_at = now(), seen_count = unresolved_devices.seen_count + 1, "
+            "event_id = EXCLUDED.event_id",
             screen_id,
             kind,
             event_id,
