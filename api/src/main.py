@@ -13,8 +13,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from src.projector.config import ProjectorConfig
+from src.projector.status import get_projector_status
+
 _db: asyncpg.Pool | None = None
 _SIDECAR_URL = os.getenv("OVERLAY_SIDECAR_URL", "http://mras-overlays:3000")
+_PROJECTOR_CFG = ProjectorConfig.from_env()
 
 
 @asynccontextmanager
@@ -197,6 +201,13 @@ async def events_stream():
                 last_ts = row["ts"]
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/projector/status")
+async def projector_status():
+    """God View projector health: cursor, backlog, lag, and ok/warn/crit level."""
+    async with _db.acquire() as conn:
+        return await get_projector_status(conn, _PROJECTOR_CFG)
 
 
 @app.get("/health")

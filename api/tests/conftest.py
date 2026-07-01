@@ -43,3 +43,24 @@ async def projector_pool():
     admin = await asyncpg.connect(ADMIN_DSN)
     await admin.execute(f"DROP DATABASE IF EXISTS {TEST_DB} WITH (FORCE)")
     await admin.close()
+
+
+@pytest.fixture(scope="module")
+async def dedicated_conn_factory():
+    """Yield a factory that opens STANDALONE (non-pooled) connections to the test DB.
+
+    The worker holds its advisory lock on a dedicated connection kept for its whole
+    lifetime — a pooled connection would free the session lock on release (asyncpg
+    runs pg_advisory_unlock_all() on reset). These tests need the same: real
+    standalone connections, closed on teardown.
+    """
+    conns = []
+
+    async def _make():
+        conn = await asyncpg.connect(TEST_DSN)
+        conns.append(conn)
+        return conn
+
+    yield _make
+    for conn in conns:
+        await conn.close()
