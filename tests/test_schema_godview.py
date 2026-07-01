@@ -186,7 +186,13 @@ async def test_runs_tables(schema_db):
 async def test_idempotency_keys(schema_db):
     # Decision 3: projector replay-safety enforced by unique natural keys
     assert ["trigger_id"] in await _has_unique(schema_db, "ad_runs")
-    assert ["display_id", "trigger_id"] in await _has_unique(schema_db, "playbacks")
+    # 021: playbacks re-keyed from (trigger_id, display_id) to raw screen_id string
+    # mirrors the observation_tracks raw-string pattern; decouples from device registration
+    assert ["screen_id", "trigger_id"] in await _has_unique(schema_db, "playbacks")
+    assert ["display_id", "trigger_id"] not in await _has_unique(schema_db, "playbacks")
+    # 021: display_id drops NOT NULL; screen_id gains NOT NULL
+    assert await _column_is_nullable(schema_db, "playbacks", "display_id") is True
+    assert await _column_is_nullable(schema_db, "playbacks", "screen_id") is False
 
 
 async def test_events_scope(schema_db):
@@ -263,3 +269,25 @@ async def test_projector_idempotency_keys(schema_db):
     # viewer_exposures: one exposure per (ad_run, observed viewer)
     assert await _column_is_nullable(schema_db, "viewer_exposures", "subject_observation_id") is False
     assert ["ad_run_id", "subject_observation_id"] in await _has_unique(schema_db, "viewer_exposures")
+
+
+async def test_projector_state_table(schema_db):
+    # 019: singleton cursor table for the God View projector worker
+    assert await _table_exists(schema_db, "projector_state"), "projector_state table missing"
+    # cursor must be bigint (tracks events.id which is bigserial)
+    assert await _column_type(schema_db, "projector_state", "cursor") == "bigint"
+    # exactly one seeded row (id=1 singleton)
+    count = await schema_db.fetchval("SELECT COUNT(*) FROM projector_state")
+    assert count == 1
+
+
+async def test_device_registry(schema_db):
+    # 020: GLOBAL UNIQUE(screen_id) on cameras and displays for unambiguous resolver lookup
+    assert ["screen_id"] in await _has_unique(schema_db, "cameras")
+    assert ["screen_id"] in await _has_unique(schema_db, "displays")
+    # 020: unresolved_devices audit sink for screen_ids that arrive before registration
+    assert await _table_exists(schema_db, "unresolved_devices"), "unresolved_devices table missing"
+    # UNIQUE(screen_id, kind) — one row per unresolved screen_id per device kind
+    assert ["kind", "screen_id"] in await _has_unique(schema_db, "unresolved_devices")
+    # event_id must be bigint — events.id is bigserial (NOT uuid); a uuid FK would fail
+    assert await _column_type(schema_db, "unresolved_devices", "event_id") == "bigint"
