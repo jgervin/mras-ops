@@ -353,9 +353,10 @@ async def test_fold_derives_viewer_exposure_on_playback_interrupted(projector_po
 # 08 — gaze/success -> watched / watch_probability join
 # --------------------------------------------------------------------------- #
 async def _gaze(pool, *, camera_track_id, ts, attending_fraction,
-                window_start=None, window_end=None, subject_profile_id=None):
+                window_start=None, window_end=None, subject_profile_id=None, system_id=None):
     """Seed one mras-vision gaze/success event carrying attending_fraction and the
-    durable camera_track_id the derivation joins on."""
+    durable camera_track_id the derivation joins on. system_id simulates the
+    projector's back-stamp; required for cross-system isolation tests (FIX 1)."""
     payload = {"camera_track_id": camera_track_id, "screen_kind": "camera",
                "attending_fraction": attending_fraction}
     if subject_profile_id is not None:
@@ -365,9 +366,9 @@ async def _gaze(pool, *, camera_track_id, ts, attending_fraction,
     if window_end is not None:
         payload["window_end"] = window_end
     return await pool.fetchval(
-        "INSERT INTO events (trigger_id, ts, service, event_type, status, payload) "
-        "VALUES ($1,$2,'mras-vision','gaze','success',$3::jsonb) RETURNING id",
-        str(uuid.uuid4()), ts, json.dumps(payload))
+        "INSERT INTO events (trigger_id, ts, service, event_type, status, payload, system_id) "
+        "VALUES ($1,$2,'mras-vision','gaze','success',$3::jsonb,$4) RETURNING id",
+        str(uuid.uuid4()), ts, json.dumps(payload), system_id)
 
 
 async def test_gaze_join_lights_up_watched_and_probability(projector_pool):
@@ -392,10 +393,13 @@ async def test_gaze_join_lights_up_watched_and_probability(projector_pool):
                       camera_track_id=b_track)
 
     await _gaze(projector_pool, camera_track_id=t_track, ts=T5, attending_fraction=0.8,
-                window_start="2026-07-01T12:00:03Z", window_end="2026-07-01T12:00:06Z")
-    await _gaze(projector_pool, camera_track_id=b_track, ts=T10, attending_fraction=0.2)
+                window_start="2026-07-01T12:00:03Z", window_end="2026-07-01T12:00:06Z",
+                system_id=ids["sys"])
+    await _gaze(projector_pool, camera_track_id=b_track, ts=T10, attending_fraction=0.2,
+                system_id=ids["sys"])
     # out-of-window gaze for the target track — MUST be ignored
-    await _gaze(projector_pool, camera_track_id=t_track, ts=OUT_WINDOW, attending_fraction=0.95)
+    await _gaze(projector_pool, camera_track_id=t_track, ts=OUT_WINDOW, attending_fraction=0.95,
+                system_id=ids["sys"])
 
     n = await _run(projector_pool, ids["playback"])
     assert n == 2
@@ -425,7 +429,8 @@ async def test_gaze_target_only_out_of_window_is_not_watched(projector_pool):
                           observed_at=W_START - timedelta(seconds=5),
                           profile=ids["target"], match_status="matched_known",
                           camera_track_id=t_track, trigger_id=ids["tid"])
-    await _gaze(projector_pool, camera_track_id=t_track, ts=OUT_WINDOW, attending_fraction=0.9)
+    await _gaze(projector_pool, camera_track_id=t_track, ts=OUT_WINDOW, attending_fraction=0.9,
+                system_id=ids["sys"])
 
     await _run(projector_pool, ids["playback"])
     tgt = await projector_pool.fetchrow(
@@ -449,9 +454,11 @@ async def test_gaze_join_is_idempotent(projector_pool):
                profile=ids["other"], match_status="matched_anonymous",
                camera_track_id=b_track)
     await _gaze(projector_pool, camera_track_id=t_track,
-                ts=W_START + timedelta(seconds=5), attending_fraction=0.8)
+                ts=W_START + timedelta(seconds=5), attending_fraction=0.8,
+                system_id=ids["sys"])
     await _gaze(projector_pool, camera_track_id=b_track,
-                ts=W_START + timedelta(seconds=10), attending_fraction=0.2)
+                ts=W_START + timedelta(seconds=10), attending_fraction=0.2,
+                system_id=ids["sys"])
 
     async def _snapshot():
         rows = await projector_pool.fetch(
@@ -472,3 +479,45 @@ async def test_gaze_join_is_idempotent(projector_pool):
     # ORDER BY role sorts by exposure_role enum order (target, viewer, bystander, ...)
     assert snap1[0] == ("target", True, 0.8, None)
     assert snap1[1] == ("bystander", None, 0.2, 0.2)
+
+
+async def test_gaze_cross_system_isolation(projector_pool):
+    """FIX 1: gaze join is scoped to playback.system_id (AND events.system_id = $5).
+
+    A second system (sys2) running the same camera_track_id 't-7' in the same time
+    window must NOT bleed into the target's attending_fraction. Without the system_id
+    predicate, sys2's higher gaze fraction (0.9) would inflate the MAX above sys's
+    true value (0.8).
+
+    RED (before fix): MAX(0.8, 0.9) = 0.9  → assertion fails.
+    GREEN (after fix): only sys rows matched → MAX = 0.8 → passes.
+    """
+    ids = await _seed(projector_pool)
+    ctid = uuid.uuid4().hex[:6]
+    t_track = f"t7-{ctid}"
+    T5 = W_START + timedelta(seconds=5)
+
+    # target observation on system A (sys)
+    o_target = await _obs(projector_pool, ids, system_id=ids["sys"],
+                          observed_at=W_START - timedelta(seconds=5),
+                          profile=ids["target"], match_status="matched_known",
+                          camera_track_id=t_track, trigger_id=ids["tid"])
+
+    # system A gaze: attending_fraction=0.8 — the correct value for this derivation
+    await _gaze(projector_pool, camera_track_id=t_track, ts=T5,
+                attending_fraction=0.8, system_id=ids["sys"])
+    # system B gaze: same camera_track_id, same window, higher fraction (0.9).
+    # Without system_id scope, MAX(0.8, 0.9)=0.9 inflates the result (wrong).
+    await _gaze(projector_pool, camera_track_id=t_track, ts=T5,
+                attending_fraction=0.9, system_id=ids["sys2"])
+
+    await _run(projector_pool, ids["playback"])
+
+    tgt = await projector_pool.fetchrow(
+        "SELECT watched, attending_fraction FROM viewer_exposures "
+        "WHERE ad_run_id=$1 AND role='target'", ids["ad_run"])
+    assert tgt is not None
+    assert tgt["watched"] is True
+    assert abs(float(tgt["attending_fraction"]) - 0.8) < 1e-9, (
+        f"attending_fraction should reflect system A only (0.8), got {tgt['attending_fraction']}"
+    )

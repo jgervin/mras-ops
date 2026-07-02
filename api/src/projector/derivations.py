@@ -66,23 +66,27 @@ def _parse_ts(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-async def _gaze_attention(conn, window_start, window_end, camera_track_id, subject_profile_id):
+async def _gaze_attention(conn, window_start, window_end, camera_track_id, subject_profile_id,
+                          system_id):
     """In-window gaze/success attention for one observation's join keys (decision 2).
 
     Joins the events journal by the durable ``camera_track_id`` (vision tracker id),
     with a ``subject_profile_id`` fallback for identified subjects, over the closed
-    playback window. Returns ``(max_attending_fraction, gaze_duration_ms, any_positive,
-    matched_count)``: ``attending_fraction`` aggregated with MAX (representative value,
-    decision 5); ``gaze_duration_ms`` = round(window_seconds * attending_fraction *
-    1000) summed over rows that carry window_start/window_end, else None."""
+    playback window. Scoped to ``system_id`` (FIX 1) so a second system reusing the
+    same per-process camera_track_id in the same window cannot cross-match. Returns
+    ``(max_attending_fraction, gaze_duration_ms, any_positive, matched_count)``:
+    ``attending_fraction`` aggregated with MAX (representative value, decision 5);
+    ``gaze_duration_ms`` = round(window_seconds * attending_fraction * 1000) summed
+    over rows that carry window_start/window_end, else None."""
     spid = str(subject_profile_id) if subject_profile_id is not None else None
     rows = await conn.fetch(
         "SELECT payload FROM events "
         "WHERE service='mras-vision' AND event_type='gaze' AND status='success' "
         "AND ts BETWEEN $1 AND $2 "
+        "AND system_id = $5 "
         "AND (payload->>'camera_track_id' = $3 "
         "     OR ($4::text IS NOT NULL AND payload->>'subject_profile_id' = $4::text))",
-        window_start, window_end, camera_track_id, spid,
+        window_start, window_end, camera_track_id, spid, system_id,
     )
     if not rows:
         return None, None, False, 0
@@ -95,15 +99,21 @@ async def _gaze_attention(conn, window_start, window_end, camera_track_id, subje
         af = p.get("attending_fraction")
         if af is None:
             continue
-        af = float(af)
+        try:
+            af = float(af)
+        except (ValueError, TypeError):
+            continue
         max_af = af if max_af is None else max(max_af, af)
         if af > 0:
             any_positive = True
         ws, we = p.get("window_start"), p.get("window_end")
         if ws and we:
-            seconds = (_parse_ts(we) - _parse_ts(ws)).total_seconds()
-            ms = round(seconds * af * 1000)
-            total_ms = ms if total_ms is None else total_ms + ms
+            try:
+                seconds = (_parse_ts(we) - _parse_ts(ws)).total_seconds()
+                ms = round(seconds * af * 1000)
+                total_ms = ms if total_ms is None else total_ms + ms
+            except (ValueError, TypeError):
+                pass
     return max_af, total_ms, any_positive, len(rows)
 
 
@@ -156,7 +166,8 @@ async def derive_viewer_exposures_for_playback(conn, playback_id) -> int:
             # attention_snapshot path only when no gaze telemetry can be measured.
             g_max, g_ms, g_pos, g_n = await _gaze_attention(
                 conn, pb["started_at"], pb["ended_at"],
-                target_obs["camera_track_id"], target_obs["subject_profile_id"])
+                target_obs["camera_track_id"], target_obs["subject_profile_id"],
+                pb["system_id"])
             t_att = _snap(target_obs["attention_snapshot"])
             if g_n:
                 # in-window gaze rows: watched = attended at all (decision 3)
@@ -179,6 +190,7 @@ async def derive_viewer_exposures_for_playback(conn, playback_id) -> int:
                         pb["started_at"], pb["ended_at"],
                     )
                 att_frac = t_att.get("attending_fraction")
+                # attention_snapshot carries only {attending, attending_fraction}; gaze_duration_ms is always None here by design.
                 gaze_ms = t_att.get("gaze_duration_ms")
             await _upsert_exposure(conn, pb, adr, target_obs,
                                    role="target", watched=watched, watch_probability=None,
@@ -199,7 +211,8 @@ async def derive_viewer_exposures_for_playback(conn, playback_id) -> int:
         # FALL BACK to the observation's attention_snapshot when no gaze row matches.
         g_max, g_ms, _g_pos, g_n = await _gaze_attention(
             conn, pb["started_at"], pb["ended_at"],
-            o["camera_track_id"], o["subject_profile_id"])
+            o["camera_track_id"], o["subject_profile_id"],
+            pb["system_id"])
         if g_n:
             watch_probability, att_frac, gaze_ms = g_max, g_max, g_ms
         else:
