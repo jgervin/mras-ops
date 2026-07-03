@@ -570,6 +570,49 @@ async def test_orchestrated_fallback_scoped_to_system(projector_pool):
     assert n == 0
 
 
+async def test_orchestrated_fallback_ignores_stale_pre_window_detection(projector_pool):
+    """DBA review: the profile fallback must carry a LOWER time bound. A same-subject
+    detection from HOURS ago (person long gone) must NOT be attributed — otherwise the
+    derivation records a confident watched=FALSE plus stale mood/demographic snapshots
+    for someone who may not have been present. Outside PROJECTOR_TARGET_LOOKBACK_S
+    (default 900s) -> target_obs is None -> NO target row (honest 'no attributable
+    target')."""
+    ids = await _seed(projector_pool)
+    # same subject, same system, but observed 3 HOURS before the playback started
+    await _obs(projector_pool, ids, system_id=ids["sys"],
+               observed_at=W_START - timedelta(hours=3),
+               profile=ids["target"], match_status="matched_known",
+               mood={"mood_label": "sad", "mood_confidence": 0.9},
+               trigger_id=str(uuid.uuid4()))
+
+    n = await _run(projector_pool, ids["playback"])
+
+    tgt = await projector_pool.fetchrow(
+        "SELECT subject_observation_id FROM viewer_exposures "
+        "WHERE ad_run_id=$1 AND role='target'", ids["ad_run"])
+    assert tgt is None, "stale (beyond-lookback) detection must NOT be attributed"
+    assert n == 0
+
+
+async def test_orchestrated_fallback_attributes_within_lookback(projector_pool):
+    """Boundary guard for the lookback bound: a pre-window detection INSIDE the default
+    900s lookback (10 minutes before started_at) is still attributed as the target."""
+    ids = await _seed(projector_pool)
+    o_recent = await _obs(projector_pool, ids, system_id=ids["sys"],
+                          observed_at=W_START - timedelta(seconds=600),
+                          profile=ids["target"], match_status="matched_known",
+                          trigger_id=str(uuid.uuid4()))
+
+    n = await _run(projector_pool, ids["playback"])
+
+    tgt = await projector_pool.fetchrow(
+        "SELECT subject_observation_id FROM viewer_exposures "
+        "WHERE ad_run_id=$1 AND role='target'", ids["ad_run"])
+    assert tgt is not None
+    assert tgt["subject_observation_id"] == o_recent
+    assert n == 1
+
+
 async def test_orchestrated_fallback_is_idempotent(projector_pool):
     """Re-deriving the orchestrated (profile-fallback) case converges: same target row,
     same gaze-sourced watched/attending_fraction (COALESCE-on-conflict upsert)."""
