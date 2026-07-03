@@ -73,7 +73,7 @@ async def handle_detection(conn, env, scope):
         env.screen_id,
         env.payload_get("camera_track_id"),
     )
-    subject_profile_id = env.payload_get("uuid")  # matched subject_profile id, per contract
+    subject_profile_id = env.payload_get("subject_profile_id")  # matched subject_profile id, per contract
     await conn.execute(
         """
         INSERT INTO subject_observations (
@@ -81,7 +81,7 @@ async def handle_detection(conn, env, scope):
             observation_track_id, observed_at, detection_type, subject_profile_id,
             camera_track_id, identity_confidence, match_status,
             bounding_box, face_quality_score, demographic_snapshot, mood_snapshot, attention_snapshot
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::text::timestamptz,$9,$10,$11,$12,$13,
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
                   $14::jsonb,$15,$16::jsonb,$17::jsonb,$18::jsonb)
         ON CONFLICT (event_id) DO UPDATE SET
             trigger_id           = EXCLUDED.trigger_id,
@@ -109,8 +109,8 @@ async def handle_detection(conn, env, scope):
         scope.system_id,
         scope.camera_id,
         track_id,
-        env.payload_get("observed_at"),
-        env.payload_get("detection_type"),
+        env.ts,
+        env.payload_get("detection_type", "face"),
         subject_profile_id,
         env.payload_get("camera_track_id"),
         env.payload_get("confidence"),

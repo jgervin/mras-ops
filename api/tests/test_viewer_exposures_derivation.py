@@ -481,6 +481,125 @@ async def test_gaze_join_is_idempotent(projector_pool):
     assert snap1[1] == ("bystander", None, 0.2, 0.2)
 
 
+async def test_orchestrated_target_by_profile_fallback(projector_pool):
+    """Orchestrated multi-display path: the composer ORCHESTRATOR mints a NEW per-round
+    trigger_id for the ad_run (ROUND-1) that does NOT equal the origin detection's
+    trigger_id (DETECT-1). So the trigger_id-only primary match finds NO target
+    observation. The ad_run DOES carry target_subject_profile_id, and the causal
+    observation shares that subject_profile_id.
+
+    The (subject_profile_id + system_id + observed_at <= started_at) fallback must
+    select the pre-window causal detection as the target, and the gaze join must still
+    light up watched=TRUE + attending_fraction from the in-window gaze row.
+
+    RED (trigger_id-only): no target row is ever created for the orchestrated path.
+    GREEN (with fallback): target row created + watched from gaze.
+    """
+    ids = await _seed(projector_pool)
+    ctid = uuid.uuid4().hex[:6]
+    t_track = f"t7-{ctid}"
+    # causal detection: BEFORE the window, on system S, subject = the ad_run target,
+    # but its trigger_id (DETECT-1) differs from the ad_run's trigger_id (ROUND-1 = ids['tid']).
+    o_target = await _obs(projector_pool, ids, system_id=ids["sys"],
+                          observed_at=W_START - timedelta(seconds=5),
+                          profile=ids["target"], match_status="matched_known",
+                          camera_track_id=t_track, trigger_id=str(uuid.uuid4()))
+    # in-window gaze for that track — attending_fraction=0.8
+    await _gaze(projector_pool, camera_track_id=t_track, ts=W_START + timedelta(seconds=5),
+                attending_fraction=0.8, system_id=ids["sys"])
+
+    await _run(projector_pool, ids["playback"])
+
+    tgt = await projector_pool.fetchrow(
+        "SELECT role, watched, attending_fraction, subject_observation_id, subject_profile_id "
+        "FROM viewer_exposures WHERE ad_run_id=$1 AND role='target'", ids["ad_run"])
+    assert tgt is not None, "orchestrated target must be attributed via profile fallback"
+    assert tgt["subject_observation_id"] == o_target
+    assert tgt["subject_profile_id"] == ids["target"]
+    assert tgt["watched"] is True
+    assert abs(float(tgt["attending_fraction"]) - 0.8) < 1e-9
+
+
+async def test_orchestrated_fallback_picks_most_recent_pre_window_detection(projector_pool):
+    """The fallback selects the MOST-RECENT detection before the playback (ORDER BY
+    observed_at DESC LIMIT 1) — the causal one. An earlier same-subject detection on the
+    same system must NOT be chosen, and a post-window one must never be picked."""
+    ids = await _seed(projector_pool)
+    # older same-subject detection (not causal)
+    await _obs(projector_pool, ids, system_id=ids["sys"],
+               observed_at=W_START - timedelta(seconds=60),
+               profile=ids["target"], match_status="matched_known",
+               trigger_id=str(uuid.uuid4()))
+    # causal detection: most recent BEFORE the window
+    o_causal = await _obs(projector_pool, ids, system_id=ids["sys"],
+                          observed_at=W_START - timedelta(seconds=3),
+                          profile=ids["target"], match_status="matched_known",
+                          trigger_id=str(uuid.uuid4()))
+    # a later same-subject detection AFTER started_at must not be chosen as target
+    await _obs(projector_pool, ids, system_id=ids["sys"], observed_at=IN_WINDOW,
+               profile=ids["target"], match_status="matched_known",
+               trigger_id=str(uuid.uuid4()))
+
+    await _run(projector_pool, ids["playback"])
+
+    tgt = await projector_pool.fetchrow(
+        "SELECT subject_observation_id FROM viewer_exposures "
+        "WHERE ad_run_id=$1 AND role='target'", ids["ad_run"])
+    assert tgt is not None
+    assert tgt["subject_observation_id"] == o_causal
+
+
+async def test_orchestrated_fallback_scoped_to_system(projector_pool):
+    """The profile fallback must be scoped to the playback's system_id. A same-subject
+    pre-window detection on a DIFFERENT system (sys2) must NOT be attributed to this
+    playback's ad_run — otherwise a person seen at another store's system would be
+    falsely credited as this ad's target."""
+    ids = await _seed(projector_pool)
+    # same subject, pre-window, but on a DIFFERENT system (sys2)
+    await _obs(projector_pool, ids, system_id=ids["sys2"],
+               observed_at=W_START - timedelta(seconds=5),
+               profile=ids["target"], match_status="matched_known",
+               trigger_id=str(uuid.uuid4()))
+
+    n = await _run(projector_pool, ids["playback"])
+
+    tgt = await projector_pool.fetchrow(
+        "SELECT subject_observation_id FROM viewer_exposures "
+        "WHERE ad_run_id=$1 AND role='target'", ids["ad_run"])
+    assert tgt is None, "cross-system same-subject detection must NOT be attributed"
+    assert n == 0
+
+
+async def test_orchestrated_fallback_is_idempotent(projector_pool):
+    """Re-deriving the orchestrated (profile-fallback) case converges: same target row,
+    same gaze-sourced watched/attending_fraction (COALESCE-on-conflict upsert)."""
+    ids = await _seed(projector_pool)
+    ctid = uuid.uuid4().hex[:6]
+    t_track = f"t7-{ctid}"
+    await _obs(projector_pool, ids, system_id=ids["sys"],
+               observed_at=W_START - timedelta(seconds=5),
+               profile=ids["target"], match_status="matched_known",
+               camera_track_id=t_track, trigger_id=str(uuid.uuid4()))
+    await _gaze(projector_pool, camera_track_id=t_track, ts=W_START + timedelta(seconds=5),
+                attending_fraction=0.8, system_id=ids["sys"])
+
+    async def _snapshot():
+        rows = await projector_pool.fetch(
+            "SELECT role, watched, attending_fraction FROM viewer_exposures "
+            "WHERE ad_run_id=$1 AND role='target'", ids["ad_run"])
+        return [(r["role"], r["watched"],
+                 None if r["attending_fraction"] is None else float(r["attending_fraction"]))
+                for r in rows]
+
+    first = await _run(projector_pool, ids["playback"])
+    snap1 = await _snapshot()
+    second = await _run(projector_pool, ids["playback"])
+    snap2 = await _snapshot()
+
+    assert first == second == 1
+    assert snap1 == snap2 == [("target", True, 0.8)]
+
+
 async def test_gaze_cross_system_isolation(projector_pool):
     """FIX 1: gaze join is scoped to playback.system_id (AND events.system_id = $5).
 
