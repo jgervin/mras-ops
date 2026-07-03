@@ -109,12 +109,13 @@ async def handle_detection(conn, env, scope):
         scope.system_id,
         scope.camera_id,
         track_id,
-        env.ts,
-        env.payload_get("detection_type", "face"),
+        env.ts,  # observed_at = DB-ingest time (events.ts), not the camera capture time
+        # `or` (not payload_get default) so an explicit JSON null also falls back:
+        env.payload_get("detection_type") or "face",
         subject_profile_id,
         env.payload_get("camera_track_id"),
         env.payload_get("confidence"),
-        env.payload_get("match_status", "no_match"),
+        env.payload_get("match_status") or "no_match",
         _jsonb(env.payload_get("bounding_box")),
         env.payload_get("face_quality_score"),
         _jsonb(env.payload_get("demographic_snapshot")),
