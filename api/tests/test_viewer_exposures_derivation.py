@@ -613,6 +613,32 @@ async def test_orchestrated_fallback_attributes_within_lookback(projector_pool):
     assert n == 1
 
 
+async def test_trigger_id_primary_match_not_overridden_by_fallback(projector_pool):
+    """Precedence guard: when the PRIMARY trigger_id path matches, the profile
+    fallback must not run (it is gated on target_obs is None). A MORE RECENT
+    same-subject pre-window detection — exactly what the fallback would pick —
+    must NOT displace the exact causal trigger_id link."""
+    ids = await _seed(projector_pool)
+    # primary: the causal observation carrying the ad_run's trigger_id
+    o_primary = await _obs(projector_pool, ids, system_id=ids["sys"],
+                           observed_at=W_START - timedelta(seconds=10),
+                           profile=ids["target"], match_status="matched_known",
+                           trigger_id=ids["tid"])
+    # decoy: more recent same-subject pre-window detection (the fallback's pick)
+    await _obs(projector_pool, ids, system_id=ids["sys"],
+               observed_at=W_START - timedelta(seconds=2),
+               profile=ids["target"], match_status="matched_known",
+               trigger_id=str(uuid.uuid4()))
+
+    await _run(projector_pool, ids["playback"])
+
+    tgt = await projector_pool.fetch(
+        "SELECT subject_observation_id FROM viewer_exposures "
+        "WHERE ad_run_id=$1 AND role='target'", ids["ad_run"])
+    assert len(tgt) == 1
+    assert tgt[0]["subject_observation_id"] == o_primary
+
+
 async def test_orchestrated_fallback_is_idempotent(projector_pool):
     """Re-deriving the orchestrated (profile-fallback) case converges: same target row,
     same gaze-sourced watched/attending_fraction (COALESCE-on-conflict upsert)."""

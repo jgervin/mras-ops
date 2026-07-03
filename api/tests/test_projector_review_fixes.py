@@ -298,8 +298,11 @@ async def test_missing_parent_observation_audits_resolve_miss_not_skip(projector
 # FIX 6 — real vision detection/success payload contract
 #
 # Vision emits: subject_profile_id, confidence, is_new_visitor, scene_context,
-# camera_track_id, attention_snapshot, screen_id, screen_kind.
-# It does NOT emit: uuid, observed_at, detection_type.
+# camera_track_id, attention_snapshot, match_status, screen_id, screen_kind.
+# match_status is 'matched_known' when the person was recognized, 'no_match'
+# otherwise (cross-repo contract, landing in mras-vision PR #22). The handler
+# keeps its 'no_match' default for ABSENT match_status (older/other emitters).
+# Vision does NOT emit: uuid, observed_at, detection_type.
 #
 # Before fix: handler reads uuid (NULL) and observed_at (NULL -> NOT NULL violation)
 #   -> event is routed to projector.skip.
@@ -328,6 +331,7 @@ async def test_detection_real_vision_payload_inserts_subject_observation(project
             "is_new_visitor": False,
             "scene_context": {"ambient_light": "bright"},
             "attention_snapshot": {"gaze_direction": "forward"},
+            "match_status": "matched_known",  # vision contract (mras-vision PR #22)
         }),
         tid,
     )
@@ -345,5 +349,56 @@ async def test_detection_real_vision_payload_inserts_subject_observation(project
     assert obs["subject_profile_id"] == profile_id
     assert obs["camera_track_id"] == "t-7"
     assert obs["detection_type"] == "face"
+    assert obs["match_status"] == "matched_known"
     assert obs["system_id"] == ids["sys"]
     assert obs["observed_at"] == event_ts
+
+
+async def test_detection_absent_match_status_defaults_to_no_match(projector_pool):
+    """Guard: an emitter that omits match_status entirely (older/other emitters)
+    still projects with the 'no_match' floor — the absent-key default must survive
+    the matched_known contract change."""
+    await _seed_registry(projector_pool)
+    await _fence(projector_pool)
+    tid = str(uuid.uuid4())
+
+    det_id = await _ins(projector_pool, "mras-vision", "detection", "success",
+                        _cam({"camera_track_id": "t-abs"}), tid)  # NO match_status key
+
+    res = await _run_fold(projector_pool)
+    assert res["skipped"] == 0
+
+    obs = await projector_pool.fetchrow(
+        "SELECT match_status FROM subject_observations WHERE event_id=$1", det_id
+    )
+    assert obs["match_status"] == "no_match"
+
+
+# --------------------------------------------------------------------------- #
+# FIX 7 — explicit JSON null must not bypass the detection defaults
+#
+# payload_get(key, default) only defaults on an ABSENT key; a payload carrying
+# an explicit JSON null ("detection_type": null) returns None, which reaches the
+# INSERT as SQL NULL — violating detection_type's NOT NULL and losing the
+# match_status 'no_match' floor. The handler must treat explicit null like
+# absent: detection_type -> 'face', match_status -> 'no_match'.
+# --------------------------------------------------------------------------- #
+async def test_detection_explicit_json_null_gets_defaults(projector_pool):
+    await _seed_registry(projector_pool)
+    await _fence(projector_pool)
+    tid = str(uuid.uuid4())
+
+    det_id = await _ins(projector_pool, "mras-vision", "detection", "success",
+                        _cam({"camera_track_id": "t-nul",
+                              "detection_type": None,      # explicit JSON null
+                              "match_status": None}), tid)  # explicit JSON null
+
+    res = await _run_fold(projector_pool)
+    assert res["skipped"] == 0, f"explicit-null payload must not skip: {res}"
+
+    obs = await projector_pool.fetchrow(
+        "SELECT detection_type, match_status FROM subject_observations WHERE event_id=$1", det_id
+    )
+    assert obs is not None
+    assert obs["detection_type"] == "face"
+    assert obs["match_status"] == "no_match"
