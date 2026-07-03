@@ -22,6 +22,7 @@ class ProjectorConfig:
     lag_warn_s: int
     lag_crit_s: int
     settle_ms: int
+    target_lookback_s: int
     advisory_lock_key: int
     projector_ver: str
 
@@ -39,6 +40,7 @@ class ProjectorConfig:
             lag_warn_s=_int("PROJECTOR_LAG_WARN_S", 10),
             lag_crit_s=_int("PROJECTOR_LAG_CRIT_S", 60),
             settle_ms=_int("PROJECTOR_SETTLE_MS", 2000),
+            target_lookback_s=_int("PROJECTOR_TARGET_LOOKBACK_S", 900),
             advisory_lock_key=_int("PROJECTOR_ADVISORY_LOCK_KEY", 20260701),
             projector_ver=env.get("PROJECTOR_VER", PROJECTOR_VER),
         )

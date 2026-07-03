@@ -33,7 +33,12 @@ Semantics chosen (documented in the report where the design under-specifies):
     where present, else NULL.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+
+# Default lower bound (seconds) for the target-profile fallback lookback; mirrors
+# ProjectorConfig.target_lookback_s (env PROJECTOR_TARGET_LOOKBACK_S). Kept as a
+# module default so direct callers of the derivation get the same semantics.
+DEFAULT_TARGET_LOOKBACK_S = 900
 
 # observation_match (013 detection enum)  ->  identity_status (010 enum)
 _IDENTITY_STATUS = {
@@ -117,7 +122,8 @@ async def _gaze_attention(conn, window_start, window_end, camera_track_id, subje
     return max_af, total_ms, any_positive, len(rows)
 
 
-async def derive_viewer_exposures_for_playback(conn, playback_id) -> int:
+async def derive_viewer_exposures_for_playback(conn, playback_id,
+                                               lookback_s=DEFAULT_TARGET_LOOKBACK_S) -> int:
     """Derive viewer_exposures for one completed playback. Returns rows upserted.
 
     No-op (returns 0) unless the playback window is CLOSED (started_at AND ended_at
@@ -170,13 +176,20 @@ async def derive_viewer_exposures_for_playback(conn, playback_id) -> int:
     # target_subject_profile_id, recover the causal observation by subject: the
     # MOST-RECENT detection of that subject on the ad_run's system BEFORE the ad
     # started (the detection precedes the playback). Scoped to system_id so a
-    # same-subject detection at another system is never mis-attributed.
+    # same-subject detection at another system is never mis-attributed, and LOWER-
+    # BOUNDED by ``lookback_s`` (env PROJECTOR_TARGET_LOOKBACK_S, default 900s) so a
+    # stale detection from hours ago — a person likely long gone — is never
+    # attributed with a confident watched=FALSE + stale mood/demographic snapshots.
+    # Nothing in the window -> target_obs stays None -> no target row (honest
+    # "no attributable target").
     if target_obs is None and adr["target_subject_profile_id"] is not None:
         target_obs = await conn.fetchrow(
             f"SELECT {_COLS} FROM subject_observations "
             "WHERE subject_profile_id=$1 AND system_id=$2 AND observed_at<=$3 "
+            "AND observed_at >= $4 "
             "ORDER BY observed_at DESC, id DESC LIMIT 1",
             adr["target_subject_profile_id"], pb["system_id"], pb["started_at"],
+            pb["started_at"] - timedelta(seconds=lookback_s),
         )
 
     if target_obs is not None:
