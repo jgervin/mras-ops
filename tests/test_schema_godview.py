@@ -229,6 +229,14 @@ async def test_feed_indexes(schema_db):
     assert "subject_embeddings_active_idx" in se
 
 
+async def test_target_attribution_indexes(schema_db):
+    # 024: index support for the projector's target-attribution queries
+    # (derivations.py primary trigger_id lookup + subject/system/observed_at fallback)
+    so = await _index_names(schema_db, "subject_observations")
+    assert "subject_observations_profile_system_observed_idx" in so
+    assert "subject_observations_trigger_idx" in so
+
+
 async def test_summary_scope_columns(schema_db):
     # Decision 2 / criterion 7.4: scope columns on every summary table
     for t in ("ad_runs", "playbacks", "viewer_exposures", "subject_observations"):
