@@ -23,14 +23,16 @@ was written for those detections. When the corresponding `playback/ended` events
 `viewer_exposures` derivation ran (`api/src/projector/fold.py:88-90`) and found **no target
 observation** — so those playbacks' exposures were derived with no target row, permanently.
 
-**Replay heals this.** Events replay in ascending `id` order, and a detection always has a
-lower `id` than the `playback/ended` that depends on it. On replay the fixed handler folds the
+**Replay heals this.** Events replay in ascending `id` order, and a detection has a lower `id`
+than the `playback/ended` that depends on it — an ingestion-ordering assumption on the bigserial
+`events.id` (the detection is ingested first), not a schema guarantee. On replay the fixed handler folds the
 detection into `subject_observations` (`api/src/projector/handlers.py:70-127`), and when the
 `playback/ended` event refolds, `derive_viewer_exposures_for_playback` re-runs and now resolves
 the target (`api/src/projector/derivations.py:159-231`).
 
-Because the `events` journal is append-only and immutable, and the summary tables are keyed
-upserts, the entire projection is (with the caveats in §2 and §4) **recomputable from the log**.
+Because the `events` journal is append-only — payloads and timestamps are immutable, though the
+typed scope columns are the projector's own mutable back-stamp (§2.5) — and the summary tables
+are keyed upserts, the projection is (with the caveats in §2 and §4) **recomputable from the log**.
 
 ## 2. Safety model — what makes replay safe (verified in code)
 
@@ -59,8 +61,10 @@ therefore requires the *manual* `UPDATE` in §3; nothing in the code path does i
 
 ### 2.3 Idempotent upserts — ON CONFLICT keys per summary table
 
-Every handler is a single `INSERT ... ON CONFLICT (<key>) DO UPDATE`
-(`api/src/projector/handlers.py:1-15`), so refolding the same event converges onto the same row:
+Every handler writes via `INSERT ... ON CONFLICT (<key>) DO UPDATE`
+(`api/src/projector/handlers.py:1-15`) — one upsert per event, except `handle_identity_match`,
+which fans out one keyed upsert per candidate (`api/src/projector/handlers.py:149-176`) — so
+refolding the same event converges onto the same rows:
 
 | Summary table | ON CONFLICT key | Citation |
 |---|---|---|
@@ -87,8 +91,12 @@ folds in the original `id` order, the final status equals the original final sta
 so a re-derivation that produces NULL for a measurement cannot wipe a previously-recorded value.
 The derivation self-guards: it is a no-op unless the playback window is closed
 (`api/src/projector/derivations.py:140-141`) and both join anchors resolved
-(`derivations.py:142-143`). The gaze join reads only the immutable `events` journal
-(`api/src/projector/derivations.py:87-95`), so it recomputes identically on replay.
+(`derivations.py:142-143`). The gaze join reads only the `events` journal
+(`api/src/projector/derivations.py:87-95`); event payloads are immutable, so on a stable device
+registry it recomputes identically on replay. **Exception:** the join filters on
+`events.system_id` (`derivations.py:91`), which is the projector's own mutable back-stamp
+(`fold.py:110`) — see §2.6(3) for how registry drift breaks this and why COALESCE does not save
+you there.
 
 ### 2.5 Scope back-stamping is idempotent — with one registry caveat
 
@@ -108,17 +116,32 @@ re-resolves scope against the **current** device registry. See §2.6(3).
    which is arguably correct, but counts of skip rows are per-fold-attempt, not per-event.
 2. **`unresolved_devices.seen_count` inflates.** The row itself is idempotent
    (`ON CONFLICT (screen_id, kind)`, `api/src/projector/scope.py:91-97`;
-   `db/migrations/020_device_registry.sql:27`) — no duplicate rows — but each replayed
-   unresolved event bumps `seen_count + 1` and touches `last_seen_at`
-   (`api/src/projector/scope.py:93`). After a replay, `seen_count` means "times folded", not
-   "times seen".
+   `db/migrations/020_device_registry.sql:27`) — no duplicate rows — but the counter is not
+   replay-stable. `_record_unresolved` fires only on a resolver cache miss
+   (`api/src/projector/scope.py:65-68`); the worker builds a fresh `ScopeResolver` per batch
+   (`api/src/projector/worker.py:60`) with a 60 s TTL cache (`api/src/projector/scope.py:50-71`),
+   so each miss bumps `seen_count + 1` and touches `last_seen_at`
+   (`api/src/projector/scope.py:93`) roughly **once per unresolved device per batch** (batch
+   size 500 default), not once per event. `seen_count` was therefore never a raw sighting
+   count — it counts cache-missed resolutions — and a replay inflates it by roughly one per
+   batch that touches that device.
 3. **Events scope back-stamp reflects the registry at replay time.** A device retired or
    deleted since the original fold resolves to the NULL scope
    (`status <> 'retired'` filters, `api/src/projector/scope.py:33,39`; NULL bundle,
    `scope.py:64-68`), and the unconditional back-stamp (`api/src/projector/fold.py:110-111`)
    will **overwrite the events row's device-scope columns to NULL**. Summary tables keep their
-   old scope (COALESCE, §2.3); the raw events rows do not. Do not replay across device
-   retirements if you care about historical event-scope stamps.
+   old scope (COALESCE, §2.3); the raw events rows do not.
+
+   This also corrupts recomputed *measurements*, not just stamps: the gaze join filters on the
+   back-stamped `events.system_id` (`api/src/projector/derivations.py:91`). Replaying across a
+   camera retirement re-stamps that camera's gaze events to NULL `system_id` *before* the
+   dependent `playback/ended` refolds; the join then finds 0 rows and — for a target with a
+   `camera_track_id` — recomputes `watched = FALSE` (`derivations.py:208-211`), a **non-NULL**
+   value, so `COALESCE(EXCLUDED.watched, ...)` (`derivations.py:297`) **overwrites a previously
+   recorded `watched = TRUE`**. Bystander `watch_probability` can regress the same way via the
+   attention-snapshot fallback (`derivations.py:249-254`). COALESCE protects against NULL
+   re-derives, **not** against recomputed non-NULL values. The "do not replay across device
+   retirements" advice stands for this stronger reason, not just cosmetic stamp loss.
 4. **Replay upserts; it never deletes.** A row written by an older buggy handler under a key the
    fixed handler no longer produces is left behind, stale. Replay is per-key convergence, not
    reconciliation. (No known instance today; noted so nobody assumes otherwise.)
@@ -207,9 +230,10 @@ re-skips the same events and duplicates skip audits, §2.6.1).
 
 - **Cost at scale.** A full replay refolds every event; the exposure derivation additionally
   re-runs a per-observation gaze join over the events journal for every closed playback
-  (`api/src/projector/derivations.py:87-95`, `fold.py:88-90`). Trivial on a demo DB (thousands
-  of events, seconds); on a large journal this is minutes-to-hours of writer-lock time during
-  which lag alarms fire.
+  (`api/src/projector/derivations.py:87-95`, `fold.py:88-90`), and the back-stamp UPDATEs every
+  replayed `events` row (`fold.py:104-122`) — dead-tuple/WAL churn on the largest table. Trivial
+  on a demo DB (thousands of events, seconds); on a large journal this is minutes-to-hours of
+  writer-lock time during which lag alarms fire.
 - **Do NOT replay a production DB once real billing/measurement data exists.** The audit trail
   duplicates (§2.6.1), diagnostic counters rewrite (§2.6.2), event scope stamps re-resolve
   against the current registry (§2.6.3), and any downstream consumer that assumed summary rows
