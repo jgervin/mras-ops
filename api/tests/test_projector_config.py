@@ -9,6 +9,7 @@ def test_defaults_when_env_unset():
     assert cfg.lag_warn_s == 10
     assert cfg.lag_crit_s == 60
     assert cfg.settle_ms == 2000
+    assert cfg.target_lookback_s == 900
     assert cfg.advisory_lock_key == 20260701
     assert cfg.projector_ver == PROJECTOR_VER
     assert cfg.database_url == "postgresql://mras:mras@localhost:5432/mras"
@@ -21,6 +22,7 @@ def test_env_overrides_win():
         "PROJECTOR_LAG_WARN_S": "5",
         "PROJECTOR_LAG_CRIT_S": "30",
         "PROJECTOR_SETTLE_MS": "1500",
+        "PROJECTOR_TARGET_LOOKBACK_S": "300",
         "PROJECTOR_ADVISORY_LOCK_KEY": "99",
         "DATABASE_URL": "postgresql://x/y",
     })
@@ -29,6 +31,7 @@ def test_env_overrides_win():
     assert cfg.lag_warn_s == 5
     assert cfg.lag_crit_s == 30
     assert cfg.settle_ms == 1500
+    assert cfg.target_lookback_s == 300
     assert cfg.advisory_lock_key == 99
     assert cfg.database_url == "postgresql://x/y"
 

@@ -110,9 +110,9 @@ async def _insert_stream(pool, ids):
                      "track_confidence": 0.9}), str(uuid.uuid4()))
 
     det_id = await _ins(pool, "mras-vision", "detection", "success",
-                        _cam({"camera_track_id": track, "observed_at": "2026-07-01T12:01:00Z",
-                              "detection_type": "face", "confidence": 0.93,
-                              "match_status": "matched_known", "uuid": str(ids["profile"]),
+                        _cam({"camera_track_id": track, "confidence": 0.93,
+                              "match_status": "matched_known",
+                              "subject_profile_id": str(ids["profile"]),
                               "bounding_box": {"x": 1, "y": 2, "w": 3, "h": 4}}), tid)
 
     await _ins(pool, "mras-vision", "identity_match", "candidates",
