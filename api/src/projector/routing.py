@@ -32,9 +32,13 @@ _REGISTRY = {
     ("mras-composer", "playback", "dispatched"): handlers.handle_playback,
     ("mras-composer", "playback", "started"): handlers.handle_playback,
     ("mras-composer", "playback", "ended"): handlers.handle_playback,
+    # FIX 4 companion: 'interrupted' is a closed-window terminal status — it must
+    # route to handle_playback so the fold can derive its viewer_exposures.
+    ("mras-composer", "playback", "interrupted"): handlers.handle_playback,
     ("mras-display", "playback", "dispatched"): handlers.handle_playback,
     ("mras-display", "playback", "started"): handlers.handle_playback,
     ("mras-display", "playback", "ended"): handlers.handle_playback,
+    ("mras-display", "playback", "interrupted"): handlers.handle_playback,
 }
 
 

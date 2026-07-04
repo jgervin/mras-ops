@@ -107,8 +107,7 @@ async def test_full_pipeline_projects_every_table_with_scope(projector_pool):
                      "track_confidence": 0.88}), str(uuid.uuid4()))
     # vision — detection (canonical observation)
     det_id = await _ins(projector_pool, "mras-vision", "detection", "success",
-                        _cam({"camera_track_id": track, "observed_at": "2026-07-01T12:01:00Z",
-                              "detection_type": "face", "confidence": 0.91,
+                        _cam({"camera_track_id": track, "confidence": 0.91,
                               "match_status": "matched_known",
                               "bounding_box": {"x": 1, "y": 2, "w": 3, "h": 4},
                               "demographic_snapshot": {"age": 30}}), tid)
@@ -226,8 +225,7 @@ async def test_replay_from_earlier_cursor_does_not_duplicate(projector_pool):
     await _ins(projector_pool, "mras-vision", "track", "opened",
                _cam({"camera_track_id": track, "started_at": "2026-07-01T12:00:00Z"}), str(uuid.uuid4()))
     det_id = await _ins(projector_pool, "mras-vision", "detection", "success",
-                        _cam({"camera_track_id": track, "observed_at": "2026-07-01T12:01:00Z",
-                              "detection_type": "face"}), tid)
+                        _cam({"camera_track_id": track}), tid)
     await _ins(projector_pool, "mras-vision", "identity_match", "candidates",
                _cam({"detection_event_id": det_id, "candidates": [
                    {"rank": 1, "match_status": "matched", "confidence": 0.9}]}), tid)
@@ -267,7 +265,7 @@ async def test_poison_event_is_skipped_and_cursor_advances(projector_pool):
 
     # poison: detection with an invalid detection_type enum -> INSERT raises in the handler
     poison_id = await _ins(projector_pool, "mras-vision", "detection", "success",
-                           _cam({"camera_track_id": "t-poison", "observed_at": "2026-07-01T12:01:00Z",
+                           _cam({"camera_track_id": "t-poison",
                                  "detection_type": "NOT_A_REAL_ENUM"}), tid)
     # a good event AFTER the poison — proves the batch keeps going
     good_id = await _ins(projector_pool, "mras-composer", "ad_run", "planned",

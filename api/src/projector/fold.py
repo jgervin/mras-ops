@@ -19,6 +19,7 @@ all commit or roll back together.
 import json
 
 from src.projector.cursor import read_cursor_for_update, advance_cursor
+from src.projector.derivations import derive_viewer_exposures_for_playback
 from src.projector.events import EventEnvelope
 from src.projector.handlers import ResolveMiss
 from src.projector.routing import route
@@ -78,6 +79,15 @@ async def fold_batch(conn, resolver, cfg) -> dict:
                     # the two concerns and silently dropped extras on scope-less events.
                     if has_scope or extra:
                         await _backstamp(conn, env.id, scope, extra or {})
+                    # Part B post-projection: when a playback's window closes, derive
+                    # viewer_exposures for it (co-scope × time-window join). Self-guards
+                    # — a no-op until started_at AND ended_at are both present — and runs
+                    # in the same per-event savepoint so it commits atomically with the fold.
+                    # FIX 4: 'interrupted' is also a closed-window terminal playback
+                    # status — derive its exposures too, else they are silently dropped.
+                    if extra and extra.get("playback_id") and env.status in ("ended", "interrupted"):
+                        await derive_viewer_exposures_for_playback(
+                            conn, extra["playback_id"], lookback_s=cfg.target_lookback_s)
             except ResolveMiss as exc:  # FIX 5: required parent row absent (data-completeness)
                 await _write_skip(conn, env, exc, cfg.projector_ver, action="projector.resolve_miss")
                 skipped += 1
