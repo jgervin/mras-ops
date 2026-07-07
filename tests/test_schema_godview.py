@@ -299,3 +299,34 @@ async def test_device_registry(schema_db):
     assert ["kind", "screen_id"] in await _has_unique(schema_db, "unresolved_devices")
     # event_id must be bigint — events.id is bigserial (NOT uuid); a uuid FK would fail
     assert await _column_type(schema_db, "unresolved_devices", "event_id") == "bigint"
+
+
+async def test_screen_groups_table(schema_db):
+    # table exists
+    assert await _table_exists(schema_db, "screen_groups"), "missing screen_groups"
+
+    # new enum with exactly these values, in order
+    assert await _enum_values(schema_db, "screen_group_type") == ["zone", "ad_cluster", "custom"]
+
+    # core columns and types
+    assert await _column_type(schema_db, "screen_groups", "id") == "uuid"
+    assert await _column_type(schema_db, "screen_groups", "system_id") == "uuid"
+    assert await _column_type(schema_db, "screen_groups", "location_id") == "uuid"
+    assert await _column_type(schema_db, "screen_groups", "name") == "text"
+    assert await _column_type(schema_db, "screen_groups", "metadata") == "jsonb"
+
+    # system_id is required, location_id is optional (denormalized, matches cameras/displays)
+    assert await _column_is_nullable(schema_db, "screen_groups", "system_id") is False
+    assert await _column_is_nullable(schema_db, "screen_groups", "location_id") is True
+
+    # FK back-references
+    assert await _fk_target(schema_db, "screen_groups", "system_id") == "systems"
+    assert await _fk_target(schema_db, "screen_groups", "location_id") == "locations"
+
+    # nullable grouping FK added to BOTH device projections
+    assert await _column_type(schema_db, "displays", "screen_group_id") == "uuid"
+    assert await _column_type(schema_db, "cameras", "screen_group_id") == "uuid"
+    assert await _column_is_nullable(schema_db, "displays", "screen_group_id") is True
+    assert await _column_is_nullable(schema_db, "cameras", "screen_group_id") is True
+    assert await _fk_target(schema_db, "displays", "screen_group_id") == "screen_groups"
+    assert await _fk_target(schema_db, "cameras", "screen_group_id") == "screen_groups"
