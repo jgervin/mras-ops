@@ -151,3 +151,60 @@ async def test_ad_run_detail_bundles_pipeline(projector_pool):
 
 async def test_ad_run_detail_missing_returns_none(projector_pool):
     assert await get_ad_run(projector_pool, uuid.uuid4()) is None
+
+
+async def _seed_exposure_rows(pool, run, sid, org):
+    """viewer_exposures.subject_observation_id is NOT NULL (018) — seed observations.
+    Grain: 2 known rows share ONE profile (identified dedupes), 2 anonymous rows."""
+    profile = await pool.fetchval(
+        "INSERT INTO subject_profiles (organization_id, status) VALUES ($1,'known') RETURNING id", org)
+
+    async def obs():
+        return await pool.fetchval(
+            "INSERT INTO subject_observations (system_id, observed_at, detection_type, match_status) "
+            "VALUES ($1, now(), 'face', 'no_match') RETURNING id", sid)
+
+    o1, o2, o3, o4 = await obs(), await obs(), await obs(), await obs()
+    await pool.execute(
+        "INSERT INTO viewer_exposures (ad_run_id, subject_observation_id, subject_profile_id, "
+        "role, identity_status, watched, watch_probability, attending_fraction, gaze_duration_ms) VALUES "
+        "($1,$2,$5,'target','known',true,NULL,0.8,4000), "
+        "($1,$3,$5,'bystander','known',NULL,0.4,0.4,NULL), "
+        "($1,$4,NULL,'bystander','anonymous',NULL,0.5,0.5,1000), "
+        "($1,$6,NULL,'bystander','unmatched',NULL,0.9,0.9,1000)",
+        run, o1, o2, o3, profile, o4)
+
+
+async def test_ad_run_detail_includes_viewer_exposure_summary(projector_pool):
+    org, loc, sid = await _org_loc_sys(projector_pool)
+    run = uuid.uuid4()
+    await projector_pool.execute(
+        "INSERT INTO ad_runs (id,trigger_id,system_id,status) VALUES ($1,$2,$3,'completed')",
+        run, uuid.uuid4(), sid)
+    await _seed_exposure_rows(projector_pool, run, sid, org)
+    d = await get_ad_run(projector_pool, run)
+    exp = d["viewer_exposure"]
+    assert exp["exposure_rows"] == 4
+    assert exp["identified_viewers"] == 1                # 2 known rows, 1 distinct profile
+    assert exp["anonymous_observations"] == 2             # non-'known' rows (row grain)
+    assert exp["estimated_viewers"] == 3
+    assert exp["target_rows"] == 1
+    assert exp["target_watched"] is True
+    assert exp["avg_watch_probability"] == pytest.approx(0.6)   # (0.4+0.5+0.9)/3
+    assert exp["avg_attending_fraction"] == pytest.approx(0.65) # (0.8+0.4+0.5+0.9)/4
+    assert exp["total_gaze_ms"] == 6000
+    # ad_runs rollup columns surfaced as-is (all NULL today — no producer, see plan)
+    assert d["ad_run"]["estimated_total_viewers"] is None
+    assert d["ad_run"]["target_watched"] is None
+
+
+async def test_ad_run_detail_viewer_exposure_empty(projector_pool):
+    org, loc, sid = await _org_loc_sys(projector_pool)
+    run = uuid.uuid4()
+    await projector_pool.execute(
+        "INSERT INTO ad_runs (id,trigger_id,system_id,status) VALUES ($1,$2,$3,'completed')",
+        run, uuid.uuid4(), sid)
+    d = await get_ad_run(projector_pool, run)
+    assert d["viewer_exposure"]["exposure_rows"] == 0
+    assert d["viewer_exposure"]["estimated_viewers"] == 0
+    assert d["viewer_exposure"]["target_watched"] is None
