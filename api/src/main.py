@@ -13,6 +13,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from src.godview.ad_runs import get_ad_runs, get_ad_run_filters, get_ad_run
+from src.godview.dashboard import get_dashboard
+from src.godview.events import get_events
+from src.godview.systems import get_systems, get_system
 from src.projector.config import ProjectorConfig
 from src.projector.status import get_projector_status
 
@@ -202,6 +206,62 @@ async def events_stream():
                 last_ts = row["ts"]
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/god-view/dashboard")
+async def god_view_dashboard():
+    async with _db.acquire() as conn:
+        return await get_dashboard(conn)
+
+
+@app.get("/god-view/ad-runs")
+async def god_view_ad_runs(status: str | None = None, system_id: str | None = None,
+                           campaign_id: str | None = None, since: str | None = None,
+                           cursor: str | None = None, limit: int = 50):
+    limit = max(1, min(limit, 100))
+    since_ts = datetime.fromisoformat(since) if since else None
+    async with _db.acquire() as conn:
+        return await get_ad_runs(conn, status=status, system_id=system_id,
+                                 campaign_id=campaign_id, since=since_ts,
+                                 cursor=cursor, limit=limit)
+
+
+@app.get("/god-view/ad-runs/filters")
+async def god_view_ad_run_filters():
+    async with _db.acquire() as conn:
+        return await get_ad_run_filters(conn)
+
+
+@app.get("/god-view/ad-runs/{ad_run_id}")
+async def god_view_ad_run(ad_run_id: str):
+    async with _db.acquire() as conn:
+        result = await get_ad_run(conn, ad_run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="ad_run not found")
+    return result
+
+
+@app.get("/god-view/systems")
+async def god_view_systems(search: str | None = None, cursor: str | None = None, limit: int = 50):
+    limit = max(1, min(limit, 100))
+    async with _db.acquire() as conn:
+        return await get_systems(conn, search=search, cursor=cursor, limit=limit)
+
+
+@app.get("/god-view/systems/{system_id}")
+async def god_view_system(system_id: str):
+    async with _db.acquire() as conn:
+        result = await get_system(conn, system_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="system not found")
+    return result
+
+
+@app.get("/god-view/events")
+async def god_view_events(cursor: str | None = None, limit: int = 50):
+    limit = max(1, min(limit, 100))
+    async with _db.acquire() as conn:
+        return await get_events(conn, cursor=cursor, limit=limit)
 
 
 @app.get("/projector/status")
