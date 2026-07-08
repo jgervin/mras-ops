@@ -16,7 +16,7 @@ async def get_ad_runs(conn, *, status=None, system_id=None, campaign_id=None,
                ar.system_id, s.name AS system_name, l.name AS location_name,
                ar.campaign_id, cmp.name AS campaign_name,
                (ar.personalization_decision_id IS NOT NULL) AS stage_decision,
-               (cr.status IN ('selected','rendered'))       AS stage_composition,
+               COALESCE(cr.status IN ('selected','rendered'), false) AS stage_composition,
                EXISTS (SELECT 1 FROM playbacks p WHERE p.ad_run_id = ar.id AND p.status = 'ended') AS stage_playback
         FROM ad_runs ar
         LEFT JOIN systems s   ON s.id = ar.system_id

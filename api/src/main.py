@@ -216,7 +216,6 @@ async def god_view_dashboard():
 async def god_view_ad_runs(status: str | None = None, system_id: str | None = None,
                            campaign_id: str | None = None, since: str | None = None,
                            cursor: str | None = None, limit: int = 50):
-    from datetime import datetime
     limit = max(1, min(limit, 100))
     since_ts = datetime.fromisoformat(since) if since else None
     async with _db.acquire() as conn:

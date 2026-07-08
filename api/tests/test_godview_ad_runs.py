@@ -63,6 +63,14 @@ async def test_stage_flags_reflect_pipeline(projector_pool):
     assert item["stage_playback"] is True
 
 
+async def test_stage_composition_false_without_composition_run(projector_pool):
+    org, loc, sid = await _org_loc_sys(projector_pool)
+    await projector_pool.execute(
+        "INSERT INTO ad_runs (trigger_id,system_id,status) VALUES ($1,$2,'composing')", uuid.uuid4(), sid)
+    page = await get_ad_runs(projector_pool)
+    assert page["items"][0]["stage_composition"] is False
+
+
 async def test_keyset_pagination_no_overlap(projector_pool):
     org, loc, sid = await _org_loc_sys(projector_pool)
     for _ in range(5):
