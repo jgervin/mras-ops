@@ -70,8 +70,26 @@ async def get_system(conn, system_id) -> dict | None:
         "SELECT id,name,group_type::text AS group_type FROM screen_groups WHERE system_id = $1 ORDER BY name",
         system_id)
     readings = await readings_for_system(conn, system_id)
+    # effective_duty (TODO-8 Phase D): drill-down is one system's cameras (a handful of
+    # rows); each sub-select is a single-row ordered probe of events_camera_duty_idx
+    # (partial: only camera_duty rows; expression: payload->>'camera_id'; id DESC matches
+    # this ORDER BY) — proportional to duty *transitions*, not traffic (027).
     cams = await conn.fetch(
-        "SELECT id,name,status::text AS status,screen_group_id FROM cameras WHERE system_id = $1 ORDER BY name",
+        """
+        SELECT c.id, c.name, c.status::text AS status, c.screen_group_id,
+               c.camera_role::text AS camera_role, c.failover_eligible,
+               COALESCE((
+                   SELECT e.payload->>'to'
+                   FROM events e
+                   WHERE e.event_type = 'camera_duty'
+                     AND e.payload->>'camera_id' = c.id::text
+                   ORDER BY e.id DESC
+                   LIMIT 1
+               ), 'unknown') AS effective_duty
+        FROM cameras c
+        WHERE c.system_id = $1
+        ORDER BY c.name
+        """,
         system_id)
     displays = await conn.fetch(
         "SELECT id,name,status::text AS status,screen_id,screen_group_id FROM displays WHERE system_id = $1 ORDER BY name",

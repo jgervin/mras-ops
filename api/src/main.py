@@ -17,6 +17,7 @@ from src.godview.ad_runs import get_ad_runs, get_ad_run_filters, get_ad_run
 from src.godview.dashboard import get_dashboard
 from src.godview.events import get_events
 from src.godview.systems import get_systems, get_system
+from src.cameras import CameraPatch, patch_camera
 from src.projector.config import ProjectorConfig
 from src.projector.status import get_projector_status
 
@@ -177,6 +178,26 @@ async def delete_component(component_id: str):
     if str(result).endswith(" 0"):
         raise HTTPException(status_code=404, detail="not found")
     return {"status": "deleted"}
+
+
+# ---------------------------------------------------------------------------
+# Cameras (admin registry — TODO-8 Phase C; auth deliberately absent, spec §8)
+# ---------------------------------------------------------------------------
+
+@app.patch("/cameras/{camera_id}")
+async def update_camera(camera_id: str, patch: CameraPatch):
+    try:
+        cam_uuid = uuid.UUID(camera_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid id")
+    fields = patch.model_dump(exclude_none=True)
+    if not fields:
+        raise HTTPException(status_code=400, detail="no updatable fields provided")
+    async with _db.acquire() as conn:
+        row = await patch_camera(conn, cam_uuid, fields)
+    if row is None:
+        raise HTTPException(status_code=404, detail="camera not found")
+    return row
 
 
 # ---------------------------------------------------------------------------

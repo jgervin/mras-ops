@@ -70,4 +70,4 @@ PY
 
 echo ""
 echo "Starting mras-vision natively (CAM_INDEX=$CAM_INDEX, DEEPFACE_BACKEND=${DEEPFACE_BACKEND:-mps})"
-exec "$VENV/bin/uvicorn" main:app --host 0.0.0.0 --port 8001
+exec "$VENV/bin/uvicorn" main:app --host 0.0.0.0 --port "${VISION_PORT:-8001}"
