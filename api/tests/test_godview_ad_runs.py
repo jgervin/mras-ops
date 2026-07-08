@@ -8,16 +8,32 @@ from src.godview.ad_runs import get_ad_runs, get_ad_run_filters
 pytestmark = pytest.mark.usefixtures("godview_isolate")
 
 
-async def _seed_decision(pool, trig):
+async def _seed_decision(pool, trig, target_subject_profile_id=None):
     """personalization_decisions.event_id is a NOT NULL FK to events — seed an events row first."""
     eid = await pool.fetchval(
         "INSERT INTO events (trigger_id, ts, service, event_type, status, payload) "
         "VALUES ($1, now(), 'mras-vision','track','opened','{}'::jsonb) RETURNING id", trig)
     dec = uuid.uuid4()
     await pool.execute(
-        "INSERT INTO personalization_decisions (id,trigger_id,event_id,decision_type) VALUES ($1,$2,$3,'identity')",
-        dec, trig, eid)
+        "INSERT INTO personalization_decisions (id,trigger_id,event_id,decision_type,target_subject_profile_id) "
+        "VALUES ($1,$2,$3,'identity',$4)",
+        dec, trig, eid, target_subject_profile_id)
     return dec
+
+
+async def _creative_refs(pool, org):
+    """component_id/ad_id/input_asset_id/output_asset_id are real FKs — seed referenced rows."""
+    comp = await pool.fetchval(
+        "INSERT INTO components (name, slug) VALUES ('Comp', $1) RETURNING id", f"comp-{uuid.uuid4()}")
+    ad = await pool.fetchval(
+        "INSERT INTO ads (name, base_video, component_id) VALUES ('Ad', 'video.mp4', $1) RETURNING id", comp)
+    asset_in = await pool.fetchval(
+        "INSERT INTO media_assets (organization_id, asset_type, storage_url, source) "
+        "VALUES ($1, 'image', 's3://in.png', 'test') RETURNING id", org)
+    asset_out = await pool.fetchval(
+        "INSERT INTO media_assets (organization_id, asset_type, storage_url, source) "
+        "VALUES ($1, 'video', 's3://out.mp4', 'test') RETURNING id", org)
+    return ad, comp, asset_in, asset_out
 
 
 async def _org_loc_sys(pool, sys_name="Sys1"):
@@ -102,11 +118,16 @@ from src.godview.ad_runs import get_ad_run
 async def test_ad_run_detail_bundles_pipeline(projector_pool):
     org, loc, sid = await _org_loc_sys(projector_pool)
     trig = uuid.uuid4()
-    dec = await _seed_decision(projector_pool, trig)  # decision_type='identity'
+    profile = await projector_pool.fetchval(
+        "INSERT INTO subject_profiles (organization_id, status) VALUES ($1,'known') RETURNING id", org)
+    dec = await _seed_decision(projector_pool, trig, target_subject_profile_id=profile)  # decision_type='identity'
+    ad_id, component_id, asset_in, asset_out = await _creative_refs(projector_pool, org)
     comp = uuid.uuid4()
     await projector_pool.execute(
-        "INSERT INTO composition_runs (id,trigger_id,render_mode,status,error_code) VALUES ($1,$2,'template_overlay','failed','OVERLAY_RENDER_TIMEOUT')",
-        comp, trig)
+        "INSERT INTO composition_runs (id,trigger_id,render_mode,status,error_code,"
+        "ad_id,component_id,input_asset_id,output_asset_id,used_spoken_name,used_visible_name) "
+        "VALUES ($1,$2,'template_overlay','failed','OVERLAY_RENDER_TIMEOUT',$3,$4,$5,$6,true,false)",
+        comp, trig, ad_id, component_id, asset_in, asset_out)
     run = uuid.uuid4()
     await projector_pool.execute(
         "INSERT INTO ad_runs (id,trigger_id,system_id,personalization_decision_id,composition_run_id,status) "
@@ -119,6 +140,13 @@ async def test_ad_run_detail_bundles_pipeline(projector_pool):
     assert d["personalization_decision"]["decision_type"] == "identity"
     assert d["composition_run"]["error_code"] == "OVERLAY_RENDER_TIMEOUT"
     assert len(d["playbacks"]) == 1
+    assert str(d["personalization_decision"]["target_subject_profile_id"]) == str(profile)
+    assert str(d["composition_run"]["ad_id"]) == str(ad_id)
+    assert str(d["composition_run"]["component_id"]) == str(component_id)
+    assert str(d["composition_run"]["input_asset_id"]) == str(asset_in)
+    assert str(d["composition_run"]["output_asset_id"]) == str(asset_out)
+    assert d["composition_run"]["used_spoken_name"] is True
+    assert d["composition_run"]["used_visible_name"] is False
 
 
 async def test_ad_run_detail_missing_returns_none(projector_pool):
