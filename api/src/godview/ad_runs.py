@@ -58,13 +58,16 @@ async def get_ad_run(conn, ad_run_id) -> dict | None:
     if ar is None:
         return None
     dec = await conn.fetchrow(
-        """SELECT id, decision_type::text AS decision_type, decision_confidence, decision_factors
+        """SELECT id, decision_type::text AS decision_type, decision_confidence, decision_factors,
+                  target_subject_profile_id
            FROM personalization_decisions
            WHERE id = (SELECT personalization_decision_id FROM ad_runs WHERE id = $1)""",
         ad_run_id)
     comp = await conn.fetchrow(
         """SELECT id, render_mode::text AS render_mode, status::text AS status,
-                  error_code, error_message, used_likeness, used_voice_clone
+                  error_code, error_message, used_likeness, used_voice_clone,
+                  ad_id, component_id, input_asset_id, output_asset_id,
+                  used_spoken_name, used_visible_name
            FROM composition_runs
            WHERE id = (SELECT composition_run_id FROM ad_runs WHERE id = $1)""",
         ad_run_id)
