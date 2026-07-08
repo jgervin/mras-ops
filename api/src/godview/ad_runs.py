@@ -53,7 +53,10 @@ async def get_ad_run_filters(conn) -> dict:
 
 async def get_ad_run(conn, ad_run_id) -> dict | None:
     ar = await conn.fetchrow(
-        "SELECT id,trigger_id,status::text AS status,started_at,ended_at,system_id FROM ad_runs WHERE id = $1",
+        """SELECT id, trigger_id, status::text AS status, started_at, ended_at, system_id,
+                  target_watched, target_watch_probability::float8 AS target_watch_probability,
+                  estimated_total_viewers, estimated_identified_viewers, estimated_anonymous_viewers
+           FROM ad_runs WHERE id = $1""",
         ad_run_id)
     if ar is None:
         return None
@@ -76,6 +79,31 @@ async def get_ad_run(conn, ad_run_id) -> dict | None:
         "FROM playbacks WHERE ad_run_id = $1 ORDER BY created_at",
         ad_run_id)
 
+    # Viewer-exposure summary: aggregate over the projector-derived viewer_exposures
+    # rows (derivations.py, fold.py:89). Index-scoped by viewer_exposures_ad_run_idx.
+    # identified dedupes by subject_profile_id; anonymous_observations is row-grain
+    # (see plan §5). Defensive grain line: a 'known' row with a NULL profile still
+    # counts as an observation instead of vanishing from the totals.
+    exposure = await conn.fetchrow(
+        """
+        SELECT (count(DISTINCT subject_profile_id) FILTER (WHERE identity_status = 'known')
+                + count(*) FILTER (WHERE identity_status <> 'known' OR subject_profile_id IS NULL))::int
+                                                                                   AS estimated_viewers,
+               count(DISTINCT subject_profile_id) FILTER (WHERE identity_status = 'known')::int
+                                                                                   AS identified_viewers,
+               count(*) FILTER (WHERE identity_status <> 'known' OR subject_profile_id IS NULL)::int
+                                                                                   AS anonymous_observations,
+               count(*)::int                                                       AS exposure_rows,
+               count(*) FILTER (WHERE role = 'target')::int                        AS target_rows,
+               bool_or(watched) FILTER (WHERE role = 'target')                     AS target_watched,
+               avg(watch_probability)::float8                                      AS avg_watch_probability,
+               avg(attending_fraction)::float8                                     AS avg_attending_fraction,
+               sum(gaze_duration_ms)::int                                          AS total_gaze_ms
+        FROM viewer_exposures
+        WHERE ad_run_id = $1
+        """,
+        ad_run_id)
+
     def _jsonb(row, field):
         import json
         d = dict(row)
@@ -88,4 +116,5 @@ async def get_ad_run(conn, ad_run_id) -> dict | None:
         "personalization_decision": _jsonb(dec, "decision_factors") if dec else None,
         "composition_run": dict(comp) if comp else None,
         "playbacks": [dict(p) for p in plays],
+        "viewer_exposure": dict(exposure),
     }
