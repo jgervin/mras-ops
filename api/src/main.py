@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from src.godview.ad_runs import get_ad_runs, get_ad_run_filters, get_ad_run
 from src.godview.dashboard import get_dashboard
+from src.godview.systems import get_systems, get_system
 from src.projector.config import ProjectorConfig
 from src.projector.status import get_projector_status
 
@@ -236,6 +237,22 @@ async def god_view_ad_run(ad_run_id: str):
         result = await get_ad_run(conn, ad_run_id)
     if result is None:
         raise HTTPException(status_code=404, detail="ad_run not found")
+    return result
+
+
+@app.get("/god-view/systems")
+async def god_view_systems(search: str | None = None, cursor: str | None = None, limit: int = 50):
+    limit = max(1, min(limit, 100))
+    async with _db.acquire() as conn:
+        return await get_systems(conn, search=search, cursor=cursor, limit=limit)
+
+
+@app.get("/god-view/systems/{system_id}")
+async def god_view_system(system_id: str):
+    async with _db.acquire() as conn:
+        result = await get_system(conn, system_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="system not found")
     return result
 
 
