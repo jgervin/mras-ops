@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from src.godview.ad_runs import get_ad_runs, get_ad_run_filters
 from src.godview.dashboard import get_dashboard
 from src.projector.config import ProjectorConfig
 from src.projector.status import get_projector_status
@@ -209,6 +210,25 @@ async def events_stream():
 async def god_view_dashboard():
     async with _db.acquire() as conn:
         return await get_dashboard(conn)
+
+
+@app.get("/god-view/ad-runs")
+async def god_view_ad_runs(status: str | None = None, system_id: str | None = None,
+                           campaign_id: str | None = None, since: str | None = None,
+                           cursor: str | None = None, limit: int = 50):
+    from datetime import datetime
+    limit = max(1, min(limit, 100))
+    since_ts = datetime.fromisoformat(since) if since else None
+    async with _db.acquire() as conn:
+        return await get_ad_runs(conn, status=status, system_id=system_id,
+                                 campaign_id=campaign_id, since=since_ts,
+                                 cursor=cursor, limit=limit)
+
+
+@app.get("/god-view/ad-runs/filters")
+async def god_view_ad_run_filters():
+    async with _db.acquire() as conn:
+        return await get_ad_run_filters(conn)
 
 
 @app.get("/projector/status")
