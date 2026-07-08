@@ -80,3 +80,41 @@ async def test_drilldown_groups_devices(projector_pool):
 
 async def test_drilldown_missing_returns_none(projector_pool):
     assert await get_system(projector_pool, uuid.uuid4()) is None
+
+
+async def _duty_event(pool, cam, frm, to):
+    await pool.execute(
+        "INSERT INTO events (trigger_id, service, event_type, status, payload) "
+        "VALUES ($1, 'mras-vision', 'camera_duty', 'success', "
+        "        jsonb_build_object('camera_id', $2::text, 'from', $3::text, 'to', $4::text, "
+        "                           'reason', 'test', 'lease_scope', 'sys:x'))",
+        uuid.uuid4(), str(cam), frm, to)
+
+
+async def test_drilldown_camera_duty_fields_defaults(projector_pool):
+    org, loc = await _org_loc(projector_pool)
+    sid = await _sys(projector_pool, org, loc, "Alpha")
+    await projector_pool.execute(
+        "INSERT INTO cameras (id,system_id,name,screen_id,failover_eligible) "
+        "VALUES ($1,$2,'C1','scr_c1',true)", uuid.uuid4(), sid)
+    c = (await get_system(projector_pool, sid))["cameras"][0]
+    assert c["camera_role"] == "detection"       # column default = admin truth
+    assert c["failover_eligible"] is True
+    assert c["effective_duty"] == "unknown"      # no camera_duty events yet (spec §5.5)
+
+
+async def test_drilldown_effective_duty_latest_event_wins(projector_pool):
+    org, loc = await _org_loc(projector_pool)
+    sid = await _sys(projector_pool, org, loc, "Alpha")
+    cam_a, cam_b = uuid.uuid4(), uuid.uuid4()
+    # deviation from plan text: screen_id has a UNIQUE constraint (020_device_registry.sql),
+    # so A and B need distinct screen_ids (plan's literal 'scr' for both violates it).
+    for cid, name, screen in ((cam_a, "A", "scr_a"), (cam_b, "B", "scr_b")):
+        await projector_pool.execute(
+            "INSERT INTO cameras (id,system_id,name,screen_id) VALUES ($1,$2,$3,$4)", cid, sid, name, screen)
+    await _duty_event(projector_pool, cam_a, "standby", "watching")
+    await _duty_event(projector_pool, cam_a, "watching", "acting_id")   # newest for A
+    await _duty_event(projector_pool, cam_b, "standby", "primary_id")
+    by_name = {c["name"]: c for c in (await get_system(projector_pool, sid))["cameras"]}
+    assert by_name["A"]["effective_duty"] == "acting_id"   # latest event, not first
+    assert by_name["B"]["effective_duty"] == "primary_id"  # per-camera isolation
