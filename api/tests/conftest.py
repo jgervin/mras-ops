@@ -64,3 +64,14 @@ async def dedicated_conn_factory():
     yield _make
     for conn in conns:
         await conn.close()
+
+
+@pytest.fixture
+async def godview_isolate(projector_pool):
+    """Function-scoped clean slate for God View tests (projector_pool is module-scoped)."""
+    await projector_pool.execute(
+        "TRUNCATE organizations, locations, systems, cameras, displays, screen_groups, "
+        "devices, ad_runs, composition_runs, personalization_decisions, playbacks, "
+        "device_health_events, system_health_events, subject_observations, "
+        "unresolved_devices, events CASCADE")
+    yield
