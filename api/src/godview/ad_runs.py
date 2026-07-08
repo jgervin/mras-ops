@@ -49,3 +49,40 @@ async def get_ad_run_filters(conn) -> dict:
     campaigns = [dict(r) for r in await conn.fetch(
         "SELECT DISTINCT c.id, c.name FROM campaigns c JOIN ad_runs ar ON ar.campaign_id = c.id ORDER BY c.name")]
     return {"systems": systems, "campaigns": campaigns}
+
+
+async def get_ad_run(conn, ad_run_id) -> dict | None:
+    ar = await conn.fetchrow(
+        "SELECT id,trigger_id,status::text AS status,started_at,ended_at,system_id FROM ad_runs WHERE id = $1",
+        ad_run_id)
+    if ar is None:
+        return None
+    dec = await conn.fetchrow(
+        """SELECT id, decision_type::text AS decision_type, decision_confidence, decision_factors
+           FROM personalization_decisions
+           WHERE id = (SELECT personalization_decision_id FROM ad_runs WHERE id = $1)""",
+        ad_run_id)
+    comp = await conn.fetchrow(
+        """SELECT id, render_mode::text AS render_mode, status::text AS status,
+                  error_code, error_message, used_likeness, used_voice_clone
+           FROM composition_runs
+           WHERE id = (SELECT composition_run_id FROM ad_runs WHERE id = $1)""",
+        ad_run_id)
+    plays = await conn.fetch(
+        "SELECT id, status::text AS status, display_id, screen_id, error_code, error_message "
+        "FROM playbacks WHERE ad_run_id = $1 ORDER BY created_at",
+        ad_run_id)
+
+    def _jsonb(row, field):
+        import json
+        d = dict(row)
+        if isinstance(d.get(field), str):
+            d[field] = json.loads(d[field])
+        return d
+
+    return {
+        "ad_run": dict(ar),
+        "personalization_decision": _jsonb(dec, "decision_factors") if dec else None,
+        "composition_run": dict(comp) if comp else None,
+        "playbacks": [dict(p) for p in plays],
+    }

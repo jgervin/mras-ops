@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from src.godview.ad_runs import get_ad_runs, get_ad_run_filters
+from src.godview.ad_runs import get_ad_runs, get_ad_run_filters, get_ad_run
 from src.godview.dashboard import get_dashboard
 from src.projector.config import ProjectorConfig
 from src.projector.status import get_projector_status
@@ -228,6 +228,15 @@ async def god_view_ad_runs(status: str | None = None, system_id: str | None = No
 async def god_view_ad_run_filters():
     async with _db.acquire() as conn:
         return await get_ad_run_filters(conn)
+
+
+@app.get("/god-view/ad-runs/{ad_run_id}")
+async def god_view_ad_run(ad_run_id: str):
+    async with _db.acquire() as conn:
+        result = await get_ad_run(conn, ad_run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="ad_run not found")
+    return result
 
 
 @app.get("/projector/status")

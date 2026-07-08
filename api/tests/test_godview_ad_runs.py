@@ -94,3 +94,32 @@ async def test_filters_list_only_referenced(projector_pool):
     f = await get_ad_run_filters(projector_pool)
     assert [s["name"] for s in f["systems"]] == ["SysUsed"]
     assert [c["name"] for c in f["campaigns"]] == ["CampUsed"]
+
+
+from src.godview.ad_runs import get_ad_run
+
+
+async def test_ad_run_detail_bundles_pipeline(projector_pool):
+    org, loc, sid = await _org_loc_sys(projector_pool)
+    trig = uuid.uuid4()
+    dec = await _seed_decision(projector_pool, trig)  # decision_type='identity'
+    comp = uuid.uuid4()
+    await projector_pool.execute(
+        "INSERT INTO composition_runs (id,trigger_id,render_mode,status,error_code) VALUES ($1,$2,'template_overlay','failed','OVERLAY_RENDER_TIMEOUT')",
+        comp, trig)
+    run = uuid.uuid4()
+    await projector_pool.execute(
+        "INSERT INTO ad_runs (id,trigger_id,system_id,personalization_decision_id,composition_run_id,status) "
+        "VALUES ($1,$2,$3,$4,$5,'failed')", run, trig, sid, dec, comp)
+    await projector_pool.execute(
+        "INSERT INTO playbacks (ad_run_id,trigger_id,screen_id,status) VALUES ($1,$2,'scr_p','failed')", run, trig)
+
+    d = await get_ad_run(projector_pool, run)
+    assert str(d["ad_run"]["id"]) == str(run)
+    assert d["personalization_decision"]["decision_type"] == "identity"
+    assert d["composition_run"]["error_code"] == "OVERLAY_RENDER_TIMEOUT"
+    assert len(d["playbacks"]) == 1
+
+
+async def test_ad_run_detail_missing_returns_none(projector_pool):
+    assert await get_ad_run(projector_pool, uuid.uuid4()) is None
