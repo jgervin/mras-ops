@@ -80,3 +80,56 @@ async def test_patch_unknown_camera_returns_none_and_journals_nothing(projector_
         assert await patch_camera(conn, uuid.uuid4(), {"camera_role": "standby"}) is None
     assert await projector_pool.fetchval(
         "SELECT count(*) FROM events WHERE event_type = 'camera_admin'") == 0
+
+
+# --- route validation (TestClient + mocked pool, per test_registry.py) -------
+
+class _AcquireCtx:
+    """route uses `async with _db.acquire() as conn:` — AsyncMock().acquire() returns
+    an un-awaited coroutine, not an async context manager, so it needs a real one.
+    (Deviation from plan's literal _client(); test_registry.py's routes never call
+    _db.acquire(), so there was no existing precedent for this pattern.)"""
+    async def __aenter__(self):
+        from unittest.mock import AsyncMock
+        return AsyncMock()
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _client(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+    from fastapi.testclient import TestClient
+    from src.main import app
+    fake_pool = AsyncMock()  # supports `await _db.close()` on lifespan shutdown
+    fake_pool.acquire = MagicMock(return_value=_AcquireCtx())  # NOT an AsyncMock: acquire()
+    # must return the context manager synchronously, to be used with `async with`.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fake/fake")
+    monkeypatch.setattr("src.main.asyncpg.create_pool", AsyncMock(return_value=fake_pool))
+    return TestClient(app)
+
+
+def test_route_rejects_unknown_field(monkeypatch):
+    with _client(monkeypatch) as client:
+        r = client.patch(f"/cameras/{uuid.uuid4()}", json={"name": "evil"})
+    assert r.status_code == 422  # extra="forbid": identity is not writable (spec §2)
+
+
+def test_route_rejects_bad_enum_value(monkeypatch):
+    with _client(monkeypatch) as client:
+        r = client.patch(f"/cameras/{uuid.uuid4()}", json={"camera_role": "boss"})
+    assert r.status_code == 422
+
+
+def test_route_rejects_bad_uuid_and_empty_patch(monkeypatch):
+    with _client(monkeypatch) as client:
+        assert client.patch("/cameras/not-a-uuid", json={"status": "offline"}).status_code == 400
+        assert client.patch(f"/cameras/{uuid.uuid4()}", json={}).status_code == 400
+
+
+def test_route_404_on_unknown_camera(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr("src.main.patch_camera", AsyncMock(return_value=None))
+    with _client(monkeypatch) as client:
+        r = client.patch(f"/cameras/{uuid.uuid4()}", json={"camera_role": "standby"})
+    assert r.status_code == 404
