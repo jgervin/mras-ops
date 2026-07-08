@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from src.godview.dashboard import get_dashboard
 from src.projector.config import ProjectorConfig
 from src.projector.status import get_projector_status
 
@@ -202,6 +203,12 @@ async def events_stream():
                 last_ts = row["ts"]
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/god-view/dashboard")
+async def god_view_dashboard():
+    async with _db.acquire() as conn:
+        return await get_dashboard(conn)
 
 
 @app.get("/projector/status")
