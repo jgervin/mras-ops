@@ -20,9 +20,11 @@ from src.godview.systems import get_systems, get_system
 from src.cameras import CameraPatch, patch_camera
 from src.projector.config import ProjectorConfig
 from src.projector.status import get_projector_status
+from src.registry.lifecycle import TransitionError
 from src.registry.reads import (get_audit, get_detail, list_cameras, list_displays,
                                 list_locations, list_organizations, list_screen_groups,
                                 list_systems, list_unresolved)
+from src.registry.writes import SemanticError
 
 _db: asyncpg.Pool | None = None
 _SIDECAR_URL = os.getenv("OVERLAY_SIDECAR_URL", "http://mras-overlays:3000")
@@ -189,15 +191,18 @@ async def delete_component(component_id: str):
 
 @app.patch("/cameras/{camera_id}")
 async def update_camera(camera_id: str, patch: CameraPatch):
-    try:
-        cam_uuid = uuid.UUID(camera_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="invalid id")
-    fields = patch.model_dump(exclude_none=True)
+    cam_uuid = _uuid_or_400(camera_id)
+    fields = patch.model_dump(exclude_unset=True)   # unset != null: null-out is a real op (ungroup)
     if not fields:
         raise HTTPException(status_code=400, detail="no updatable fields provided")
-    async with _db.acquire() as conn:
-        row = await patch_camera(conn, cam_uuid, fields)
+    try:
+        async with _db.acquire() as conn:
+            row = await patch_camera(conn, cam_uuid, fields)
+    except TransitionError as exc:
+        raise HTTPException(status_code=409, detail={
+            "error": "invalid_transition", "from": exc.current, "allowed": exc.allowed})
+    except SemanticError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     if row is None:
         raise HTTPException(status_code=404, detail="camera not found")
     return row
