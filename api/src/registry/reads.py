@@ -142,3 +142,97 @@ async def list_displays(conn, *, system_id=None, screen_group_id=None, cursor=No
         system_id, screen_group_id, cur_name, cur_id, limit + 1)
     items, next_cursor = page(rows, limit)
     return {"counts": {"total": total}, "items": items, "next_cursor": next_cursor}
+
+
+# --- §5.1 detail --------------------------------------------------------------
+# Table-driven over STATIC SQL: (sql, identity keys, config keys, extra state keys).
+# created_at/updated_at are always STATE (spec §5.1). jsonb comes back from asyncpg
+# as str (no codec installed in this app) -> parsed here so config is an object.
+
+_JSONB_KEYS = {"metadata", "config", "calibration"}
+
+_DETAIL = {
+    "organization": (
+        "SELECT id, parent_organization_id, name, organization_type::text AS organization_type, "
+        "metadata, status::text AS status, created_at, updated_at "
+        "FROM organizations WHERE id = $1",
+        ("id", "parent_organization_id"),
+        ("name", "organization_type", "metadata", "status"),
+        (),
+    ),
+    "location": (
+        "SELECT id, parent_location_id, name, location_type::text AS location_type, "
+        "country, region, state, city, address, lat::float8 AS lat, lng::float8 AS lng, "
+        "timezone, metadata, status::text AS status, created_at, updated_at "
+        "FROM locations WHERE id = $1",
+        ("id", "parent_location_id"),
+        ("name", "location_type", "country", "region", "state", "city", "address",
+         "lat", "lng", "timezone", "metadata", "status"),
+        (),
+    ),
+    "system": (
+        "SELECT id, organization_id, location_id, name, system_type::text AS system_type, "
+        "zone, floor, lat::float8 AS lat, lng::float8 AS lng, timezone, config, "
+        "status::text AS status, created_at, updated_at "
+        "FROM systems WHERE id = $1",
+        ("id", "organization_id", "location_id"),
+        ("name", "system_type", "zone", "floor", "lat", "lng", "timezone", "config", "status"),
+        (),
+    ),
+    "screen_group": (
+        "SELECT id, system_id, location_id, name, group_type::text AS group_type, "
+        "metadata, status::text AS status, created_at, updated_at "
+        "FROM screen_groups WHERE id = $1",
+        ("id", "system_id", "location_id"),
+        ("name", "group_type", "metadata", "status"),
+        (),
+    ),
+    "camera": (
+        "SELECT c.id, c.device_id, c.system_id, c.location_id, c.screen_id, c.name, "
+        "c.camera_role::text AS camera_role, c.failover_eligible, c.screen_group_id, "
+        "c.stream_url, c.calibration, c.status::text AS status, c.last_seen_at, "
+        "c.created_at, c.updated_at, "
+        "COALESCE((SELECT e.payload->>'to' FROM events e "
+        "          WHERE e.event_type = 'camera_duty' "
+        "            AND e.payload->>'camera_id' = c.id::text "
+        "          ORDER BY e.id DESC LIMIT 1), 'unknown') AS effective_duty "
+        "FROM cameras c WHERE c.id = $1",
+        ("id", "device_id", "system_id", "location_id", "screen_id"),
+        ("name", "camera_role", "failover_eligible", "screen_group_id",
+         "stream_url", "calibration", "status"),
+        ("last_seen_at", "effective_duty"),
+    ),
+    "display": (
+        "SELECT id, device_id, system_id, location_id, screen_id, name, "
+        "display_role::text AS display_role, screen_group_id, resolution_width, "
+        "resolution_height, calibration, status::text AS status, last_seen_at, "
+        "created_at, updated_at "
+        "FROM displays WHERE id = $1",
+        ("id", "device_id", "system_id", "location_id", "screen_id"),
+        ("name", "display_role", "screen_group_id", "resolution_width",
+         "resolution_height", "calibration", "status"),
+        ("last_seen_at",),
+    ),
+}
+
+
+def _val(row, key):
+    v = row[key]
+    if isinstance(v, uuid.UUID):
+        return str(v)
+    if key in _JSONB_KEYS and isinstance(v, str):
+        return json.loads(v)
+    return v
+
+
+async def get_detail(conn, object_type: str, object_id) -> dict | None:
+    sql, identity_keys, config_keys, state_keys = _DETAIL[object_type]
+    row = await conn.fetchrow(sql, object_id)
+    if row is None:
+        return None
+    return {
+        "object_type": object_type,
+        "identity": {k: _val(row, k) for k in identity_keys},
+        "config": {k: _val(row, k) for k in config_keys},
+        "state": {k: _val(row, k) for k in (*state_keys, "created_at", "updated_at")},
+    }
