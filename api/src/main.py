@@ -20,6 +20,7 @@ from src.godview.systems import get_systems, get_system
 from src.cameras import CameraPatch, patch_camera
 from src.projector.config import ProjectorConfig
 from src.projector.status import get_projector_status
+from src.registry.devices import DisplayPatch, patch_display
 from src.registry.lifecycle import TransitionError
 from src.registry.reads import (get_audit, get_detail, list_cameras, list_displays,
                                 list_locations, list_organizations, list_screen_groups,
@@ -306,6 +307,29 @@ async def registry_audit(object_id: str, cursor: str | None = None, limit: int =
 async def registry_unresolved(cursor: str | None = None, limit: int = 50):
     async with _db.acquire() as conn:
         return await list_unresolved(conn, cursor=cursor, limit=_clamp(limit))
+
+
+# ---------------------------------------------------------------------------
+# Registry — Fleet P2 device writes (spec 2026-07-08 fleet-management, D3/D6/D7/D8/D10)
+# ---------------------------------------------------------------------------
+
+@app.patch("/displays/{display_id}")
+async def update_display(display_id: str, patch: DisplayPatch):
+    disp_uuid = _uuid_or_400(display_id)
+    fields = patch.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(status_code=400, detail="no updatable fields provided")
+    try:
+        async with _db.acquire() as conn:
+            row = await patch_display(conn, disp_uuid, fields)
+    except TransitionError as exc:
+        raise HTTPException(status_code=409, detail={
+            "error": "invalid_transition", "from": exc.current, "allowed": exc.allowed})
+    except SemanticError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if row is None:
+        raise HTTPException(status_code=404, detail="display not found")
+    return row
 
 
 # ---------------------------------------------------------------------------
