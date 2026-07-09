@@ -20,7 +20,8 @@ from src.godview.systems import get_systems, get_system
 from src.cameras import CameraPatch, patch_camera
 from src.projector.config import ProjectorConfig
 from src.projector.status import get_projector_status
-from src.registry.devices import DisplayPatch, patch_display
+from src.registry.devices import (CameraCreate, DisplayCreate, DisplayPatch, create_camera,
+                                  create_display, patch_display)
 from src.registry.lifecycle import TransitionError
 from src.registry.reads import (get_audit, get_detail, list_cameras, list_displays,
                                 list_locations, list_organizations, list_screen_groups,
@@ -330,6 +331,28 @@ async def update_display(display_id: str, patch: DisplayPatch):
     if row is None:
         raise HTTPException(status_code=404, detail="display not found")
     return row
+
+
+@app.post("/cameras", status_code=201)
+async def register_camera(body: CameraCreate):
+    try:
+        async with _db.acquire() as conn:
+            return await create_camera(conn, body)
+    except SemanticError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(status_code=409, detail="screen_id already registered")
+
+
+@app.post("/displays", status_code=201)
+async def register_display(body: DisplayCreate):
+    try:
+        async with _db.acquire() as conn:
+            return await create_display(conn, body)
+    except SemanticError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(status_code=409, detail="screen_id already registered")
 
 
 # ---------------------------------------------------------------------------
