@@ -20,6 +20,9 @@ from src.godview.systems import get_systems, get_system
 from src.cameras import CameraPatch, patch_camera
 from src.projector.config import ProjectorConfig
 from src.projector.status import get_projector_status
+from src.registry.reads import (get_audit, get_detail, list_cameras, list_displays,
+                                list_locations, list_organizations, list_screen_groups,
+                                list_systems, list_unresolved)
 
 _db: asyncpg.Pool | None = None
 _SIDECAR_URL = os.getenv("OVERLAY_SIDECAR_URL", "http://mras-overlays:3000")
@@ -198,6 +201,106 @@ async def update_camera(camera_id: str, patch: CameraPatch):
     if row is None:
         raise HTTPException(status_code=404, detail="camera not found")
     return row
+
+
+# ---------------------------------------------------------------------------
+# Registry — Fleet P1 reads (spec 2026-07-08 fleet-management, D9)
+# ---------------------------------------------------------------------------
+
+def _uuid_or_400(raw: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid id")
+
+
+def _clamp(limit: int) -> int:
+    return max(1, min(limit, 100))
+
+
+@app.get("/organizations")
+async def registry_organizations(cursor: str | None = None, limit: int = 50):
+    async with _db.acquire() as conn:
+        return await list_organizations(conn, cursor=cursor, limit=_clamp(limit))
+
+
+@app.get("/locations")
+async def registry_locations(parent_location_id: str = "root",
+                             cursor: str | None = None, limit: int = 50):
+    parent = None if parent_location_id == "root" else _uuid_or_400(parent_location_id)
+    async with _db.acquire() as conn:
+        return await list_locations(conn, parent_id=parent, cursor=cursor, limit=_clamp(limit))
+
+
+@app.get("/systems")
+async def registry_systems(location_id: str, cursor: str | None = None, limit: int = 50):
+    async with _db.acquire() as conn:
+        return await list_systems(conn, location_id=_uuid_or_400(location_id),
+                                  cursor=cursor, limit=_clamp(limit))
+
+
+@app.get("/screen-groups")
+async def registry_screen_groups(system_id: str, cursor: str | None = None, limit: int = 50):
+    async with _db.acquire() as conn:
+        return await list_screen_groups(conn, system_id=_uuid_or_400(system_id),
+                                        cursor=cursor, limit=_clamp(limit))
+
+
+def _device_scope(system_id: str | None, screen_group_id: str | None):
+    if (system_id is None) == (screen_group_id is None):     # both or neither
+        raise HTTPException(status_code=422,
+                            detail="provide exactly one of system_id or screen_group_id")
+    return (_uuid_or_400(system_id) if system_id else None,
+            _uuid_or_400(screen_group_id) if screen_group_id else None)
+
+
+@app.get("/cameras")
+async def registry_cameras(system_id: str | None = None, screen_group_id: str | None = None,
+                           cursor: str | None = None, limit: int = 50):
+    sid, gid = _device_scope(system_id, screen_group_id)
+    async with _db.acquire() as conn:
+        return await list_cameras(conn, system_id=sid, screen_group_id=gid,
+                                  cursor=cursor, limit=_clamp(limit))
+
+
+@app.get("/displays")
+async def registry_displays(system_id: str | None = None, screen_group_id: str | None = None,
+                            cursor: str | None = None, limit: int = 50):
+    sid, gid = _device_scope(system_id, screen_group_id)
+    async with _db.acquire() as conn:
+        return await list_displays(conn, system_id=sid, screen_group_id=gid,
+                                   cursor=cursor, limit=_clamp(limit))
+
+
+_DETAIL_ROUTES = (("organizations", "organization"), ("locations", "location"),
+                  ("systems", "system"), ("screen-groups", "screen_group"),
+                  ("cameras", "camera"), ("displays", "display"))
+
+def _register_detail_routes():
+    for path, object_type in _DETAIL_ROUTES:
+        def make(object_type=object_type):
+            async def detail(object_id: str):
+                async with _db.acquire() as conn:
+                    result = await get_detail(conn, object_type, _uuid_or_400(object_id))
+                if result is None:
+                    raise HTTPException(status_code=404, detail=f"{object_type} not found")
+                return result
+            return detail
+        app.get(f"/{path}/{{object_id}}")(make())
+
+_register_detail_routes()
+
+
+@app.get("/registry/audit")
+async def registry_audit(object_id: str, cursor: str | None = None, limit: int = 20):
+    async with _db.acquire() as conn:
+        return await get_audit(conn, object_id, cursor=cursor, limit=_clamp(limit))
+
+
+@app.get("/unresolved-devices")
+async def registry_unresolved(cursor: str | None = None, limit: int = 50):
+    async with _db.acquire() as conn:
+        return await list_unresolved(conn, cursor=cursor, limit=_clamp(limit))
 
 
 # ---------------------------------------------------------------------------
