@@ -20,6 +20,7 @@ from src.godview.systems import get_systems, get_system
 from src.cameras import CameraPatch, patch_camera
 from src.projector.config import ProjectorConfig
 from src.projector.status import get_projector_status
+from src.registry.adopt import AdoptBody, adopt_display
 from src.registry.devices import (CameraCreate, DisplayCreate, DisplayPatch, create_camera,
                                   create_display, patch_display)
 from src.registry.lifecycle import TransitionError
@@ -353,6 +354,20 @@ async def register_display(body: DisplayCreate):
         raise HTTPException(status_code=422, detail=str(exc))
     except asyncpg.UniqueViolationError:
         raise HTTPException(status_code=409, detail="screen_id already registered")
+
+
+@app.post("/displays/adopt", status_code=201)
+async def adopt_unresolved_display(body: AdoptBody):
+    try:
+        async with _db.acquire() as conn:
+            row = await adopt_display(conn, body)
+    except SemanticError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(status_code=409, detail="screen_id already registered")
+    if row is None:
+        raise HTTPException(status_code=404, detail="unresolved device not found")
+    return row
 
 
 # ---------------------------------------------------------------------------
