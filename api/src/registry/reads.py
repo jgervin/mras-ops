@@ -236,3 +236,61 @@ async def get_detail(conn, object_type: str, object_id) -> dict | None:
         "config": {k: _val(row, k) for k in config_keys},
         "state": {k: _val(row, k) for k in (*state_keys, "created_at", "updated_at")},
     }
+
+
+# --- audit trail ---------------------------------------------------------------
+# Three UNION ALL branches so each is a probe of ITS partial index
+# (events_registry_admin_idx / events_camera_admin_idx from 028,
+#  events_camera_duty_idx from 027) — an OR would defeat the ORDER BY id DESC
+#  probes and scan (spec §6: never a journal scan). Cursor = stringified events.id.
+
+async def get_audit(conn, object_id: str, *, cursor=None, limit=20) -> dict:
+    before = int(cursor) if cursor else None
+    rows = await conn.fetch(
+        """
+        SELECT id, ts, event_type, payload FROM (
+            (SELECT id, ts, event_type, payload FROM events
+             WHERE event_type = 'registry_admin' AND payload->>'object_id' = $1
+               AND ($2::bigint IS NULL OR id < $2) ORDER BY id DESC LIMIT $3)
+            UNION ALL
+            (SELECT id, ts, event_type, payload FROM events
+             WHERE event_type = 'camera_admin' AND payload->>'camera_id' = $1
+               AND ($2::bigint IS NULL OR id < $2) ORDER BY id DESC LIMIT $3)
+            UNION ALL
+            (SELECT id, ts, event_type, payload FROM events
+             WHERE event_type = 'camera_duty' AND payload->>'camera_id' = $1
+               AND ($2::bigint IS NULL OR id < $2) ORDER BY id DESC LIMIT $3)
+        ) merged ORDER BY id DESC LIMIT $3
+        """,
+        object_id, before, limit + 1)
+    items = []
+    for r in rows[:limit]:
+        p = r["payload"]
+        items.append({"id": r["id"], "ts": r["ts"], "event_type": r["event_type"],
+                      "payload": json.loads(p) if isinstance(p, str) else p})
+    next_cursor = str(rows[limit - 1]["id"]) if len(rows) > limit else None
+    return {"items": items, "next_cursor": next_cursor}
+
+
+# --- unresolved devices (D11 read half) -----------------------------------------
+# Ordered by recency, not name (these rows have no name) -> reuse the godview
+# timestamp cursor (encode_cursor/decode_cursor), DESC keyset.
+
+async def list_unresolved(conn, *, cursor=None, limit=50) -> dict:
+    total = await conn.fetchval("SELECT count(*) FROM unresolved_devices")
+    cur_ts, cur_id = decode_cursor(cursor)
+    rows = await conn.fetch(
+        """
+        SELECT id, screen_id, kind, event_id, first_seen_at, last_seen_at, seen_count
+        FROM unresolved_devices
+        WHERE ($1::timestamptz IS NULL OR (last_seen_at, id) < ($1::timestamptz, $2::uuid))
+        ORDER BY last_seen_at DESC, id DESC
+        LIMIT $3
+        """,
+        cur_ts, cur_id, limit + 1)
+    items = [dict(r) for r in rows[:limit]]
+    next_cursor = None
+    if len(rows) > limit:
+        last = rows[limit - 1]
+        next_cursor = encode_cursor(last["last_seen_at"], last["id"])
+    return {"counts": {"total": total}, "items": items, "next_cursor": next_cursor}
