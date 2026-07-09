@@ -111,8 +111,8 @@ def _client(monkeypatch):
 
 def test_route_rejects_unknown_field(monkeypatch):
     with _client(monkeypatch) as client:
-        r = client.patch(f"/cameras/{uuid.uuid4()}", json={"name": "evil"})
-    assert r.status_code == 422  # extra="forbid": identity is not writable (spec §2)
+        r = client.patch(f"/cameras/{uuid.uuid4()}", json={"screen_id": "evil"})
+    assert r.status_code == 422  # extra="forbid": identity is not writable (spec D2 — name is CONFIG now)
 
 
 def test_route_rejects_bad_enum_value(monkeypatch):
