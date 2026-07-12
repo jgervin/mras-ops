@@ -177,3 +177,58 @@ async def test_map_null_latlng_venue_still_listed(projector_pool):
     v = _venue_by_name(await get_map(projector_pool), "NoCoords")
     assert v["lat"] is None and v["lng"] is None
     assert v["rollup"]["systems"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# GET /god-view/map/locations/{id} — venue panel payload
+# --------------------------------------------------------------------------- #
+from src.godview.map import get_map_location  # noqa: E402  (module top in final file)
+
+
+async def test_panel_nested_shape(projector_pool):
+    org = await _org(projector_pool)
+    loc = await _venue(projector_pool, "Panel Venue")
+    s1 = await _system(projector_pool, org, loc, "Alpha Wall")
+    s2 = await _system(projector_pool, org, loc, "Beta Wall")
+    await projector_pool.execute(
+        "INSERT INTO cameras (system_id,screen_id,status,name,last_seen_at) "
+        "VALUES ($1,'cam-a1','active','Cam A1', now())", s1)
+    await projector_pool.execute(
+        "INSERT INTO displays (system_id,screen_id,status,name) "
+        "VALUES ($1,'disp-a1','degraded','Disp A1')", s1)
+    await projector_pool.execute(
+        "INSERT INTO displays (system_id,screen_id,status,name) "
+        "VALUES ($1,'disp-b1','active','Disp B1')", s2)
+
+    panel = await get_map_location(projector_pool, loc)
+    assert panel["location"]["name"] == "Panel Venue"
+    assert panel["location"]["lat"] == 10.0
+    systems = {s["name"]: s for s in panel["systems"]}
+    assert set(systems) == {"Alpha Wall", "Beta Wall"}
+    alpha = systems["Alpha Wall"]
+    assert [c["screen_id"] for c in alpha["cameras"]] == ["cam-a1"]
+    assert alpha["cameras"][0]["last_seen_at"] is not None
+    assert [d["screen_id"] for d in alpha["displays"]] == ["disp-a1"]
+    assert alpha["displays"][0]["status"] == "degraded"
+    assert systems["Beta Wall"]["cameras"] == []
+    assert [d["screen_id"] for d in systems["Beta Wall"]["displays"]] == ["disp-b1"]
+
+
+async def test_panel_ad_runs_limited_newest_first(projector_pool):
+    org = await _org(projector_pool)
+    loc = await _venue(projector_pool, "V")
+    sid = await _system(projector_pool, org, loc, "S")
+    for i in range(5):
+        await projector_pool.execute(
+            "INSERT INTO ad_runs (trigger_id,location_id,system_id,status,created_at) "
+            "VALUES ($1,$2,$3,'completed', now() - ($4 || ' minutes')::interval)",
+            uuid.uuid4(), loc, sid, str(i))
+    panel = await get_map_location(projector_pool, loc, limit=3)
+    assert len(panel["ad_runs"]) == 3
+    times = [r["created_at"] for r in panel["ad_runs"]]
+    assert times == sorted(times, reverse=True)  # newest first
+    assert panel["ad_runs"][0]["system_name"] == "S"
+
+
+async def test_panel_unknown_location_returns_none(projector_pool):
+    assert await get_map_location(projector_pool, uuid.uuid4()) is None
