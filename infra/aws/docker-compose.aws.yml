@@ -1,0 +1,41 @@
+# TODO-2: AWS GPU override for the venue box. Usage — from the mras-ops
+# checkout on the EC2 instance (repos in sibling layout, see README):
+#
+#   docker compose -f docker-compose.yml -f infra/aws/docker-compose.aws.yml \
+#     --profile docker-vision up -d --build
+#
+# Only mras-vision is overridden. On Linux/EC2 vision CAN run in Docker — the
+# run-natively rule is a macOS webcam limitation only. Requires compose >= 2.17
+# (dockerfile_inline) and the NVIDIA container toolkit, both present on the
+# Deep Learning Base GPU AMI that launch.sh selects.
+services:
+  mras-vision:
+    build:
+      # Relative to this file: ../../../mras-vision == the sibling checkout.
+      context: ../../../mras-vision
+      # Keep in sync with mras-vision/Dockerfile. Adds the CUDA libraries
+      # TensorFlow needs to see the T4: plain `tensorflow` pip wheels on Linux
+      # ship no CUDA runtime, so DeepFace/ArcFace would silently run on CPU.
+      # torch (pulled in by ultralytics for YOLO) bundles CUDA already.
+      dockerfile_inline: |
+        FROM python:3.11-slim
+        WORKDIR /app
+        RUN apt-get update && apt-get install -y --no-install-recommends \
+            libgl1 libglib2.0-0 libxcb1 libsm6 libxext6 \
+            && rm -rf /var/lib/apt/lists/*
+        COPY requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt \
+            && pip install --no-cache-dir "tensorflow[and-cuda]"
+        COPY . .
+        CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      # Documentation only: nothing reads DEEPFACE_BACKEND today (TF/torch
+      # auto-detect CUDA). Set for consistency with .env.example's "cuda (AWS)".
+      DEEPFACE_BACKEND: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
