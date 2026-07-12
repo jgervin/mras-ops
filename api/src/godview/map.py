@@ -194,7 +194,8 @@ async def get_map_location(conn, location_id, *, limit: int = 20) -> dict | None
         s["displays"] = by_sys_disps.get(s["id"], [])
 
     ad_runs = [dict(r) for r in await conn.fetch(
-        "SELECT ar.id, ar.status::text AS status, ar.system_id, s.name AS system_name, "
+        "SELECT ar.id, ar.status::text AS status, ar.system_id, ar.display_id, "
+        "s.name AS system_name, "
         "ar.started_at, ar.ended_at, ar.created_at "
         "FROM ad_runs ar LEFT JOIN systems s ON s.id = ar.system_id "
         "WHERE ar.location_id = $1 "
