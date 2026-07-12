@@ -232,3 +232,65 @@ async def test_panel_ad_runs_limited_newest_first(projector_pool):
 
 async def test_panel_unknown_location_returns_none(projector_pool):
     assert await get_map_location(projector_pool, uuid.uuid4()) is None
+
+
+# --------------------------------------------------------------------------- #
+# Globe v2 additive fields: venue org + rollup.last_run_created_at (Plan C)
+# --------------------------------------------------------------------------- #
+async def _named_org(pool, org_id, name):
+    await pool.execute(
+        "INSERT INTO organizations (id,name,organization_type) VALUES ($1,$2,'host')",
+        uuid.UUID(org_id), name)
+    return uuid.UUID(org_id)
+
+
+async def test_map_org_is_dominant_by_system_count_with_name(projector_pool):
+    a = await _named_org(projector_pool, "aaaaaaaa-0000-4000-8000-000000000001", "Alpha Retail")
+    b = await _named_org(projector_pool, "bbbbbbbb-0000-4000-8000-000000000001", "Beta Retail")
+    loc = await _venue(projector_pool, "V")
+    await _system(projector_pool, a, loc, "S1")
+    await _system(projector_pool, a, loc, "S2")
+    await _system(projector_pool, b, loc, "S3")
+    v = _venue_by_name(await get_map(projector_pool), "V")
+    assert v["org"] == {"id": a, "name": "Alpha Retail"}  # 2 systems beat 1
+
+
+async def test_map_org_tiebreak_is_count_desc_then_org_id(projector_pool):
+    # equal counts -> lower organization_id wins (deterministic, testable)
+    lo = await _named_org(projector_pool, "10000000-0000-4000-8000-000000000001", "Low Org")
+    hi = await _named_org(projector_pool, "20000000-0000-4000-8000-000000000001", "High Org")
+    loc = await _venue(projector_pool, "V")
+    await _system(projector_pool, hi, loc, "S-hi")
+    await _system(projector_pool, lo, loc, "S-lo")
+    v = _venue_by_name(await get_map(projector_pool), "V")
+    assert v["org"] == {"id": lo, "name": "Low Org"}
+
+
+async def test_map_last_run_created_at_none_without_runs(projector_pool):
+    org = await _org(projector_pool)
+    loc = await _venue(projector_pool, "V")
+    await _system(projector_pool, org, loc)
+    v = _venue_by_name(await get_map(projector_pool), "V")
+    assert v["rollup"]["last_run_created_at"] is None
+    assert v["org"] is not None  # org present even with zero activity
+
+
+async def test_map_last_run_created_at_is_unwindowed_max(projector_pool):
+    # NOT windowed like runs_last_hour: a 2h-old run still counts; the max is
+    # monotone (Lane 3's "new run" delta signal must never move backwards).
+    org = await _org(projector_pool)
+    loc = await _venue(projector_pool, "V")
+    sid = await _system(projector_pool, org, loc)
+    await projector_pool.execute(
+        "INSERT INTO ad_runs (trigger_id,location_id,system_id,status,created_at) "
+        "VALUES ($1,$2,$3,'completed', now() - interval '2 hours')",
+        uuid.uuid4(), loc, sid)
+    v = _venue_by_name(await get_map(projector_pool), "V")
+    first = v["rollup"]["last_run_created_at"]
+    assert first is not None
+    assert v["rollup"]["runs_last_hour"] == 0  # windowed sibling disagrees — by design
+    await projector_pool.execute(
+        "INSERT INTO ad_runs (trigger_id,location_id,system_id,status) "
+        "VALUES ($1,$2,$3,'completed')", uuid.uuid4(), loc, sid)
+    v = _venue_by_name(await get_map(projector_pool), "V")
+    assert v["rollup"]["last_run_created_at"] > first  # advanced
