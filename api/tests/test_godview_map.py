@@ -294,3 +294,26 @@ async def test_map_last_run_created_at_is_unwindowed_max(projector_pool):
         "VALUES ($1,$2,$3,'completed')", uuid.uuid4(), loc, sid)
     v = _venue_by_name(await get_map(projector_pool), "V")
     assert v["rollup"]["last_run_created_at"] > first  # advanced
+
+
+async def test_panel_ad_runs_carry_display_id(projector_pool):
+    # Lane 3's traveling pulse needs the display end of each run. display_id is
+    # projector-populated from display-scope events; camera-scope-only runs
+    # (e.g. generator failure path) legitimately keep it NULL.
+    org = await _org(projector_pool)
+    loc = await _venue(projector_pool, "V")
+    sid = await _system(projector_pool, org, loc, "S")
+    disp = uuid.uuid4()
+    await projector_pool.execute(
+        "INSERT INTO displays (id,system_id,screen_id) VALUES ($1,$2,'disp-x')",
+        disp, sid)
+    await projector_pool.execute(
+        "INSERT INTO ad_runs (trigger_id,location_id,system_id,display_id,status) "
+        "VALUES ($1,$2,$3,$4,'completed')", uuid.uuid4(), loc, sid, disp)
+    await projector_pool.execute(
+        "INSERT INTO ad_runs (trigger_id,location_id,system_id,status) "
+        "VALUES ($1,$2,$3,'failed')", uuid.uuid4(), loc, sid)
+    panel = await get_map_location(projector_pool, loc)
+    by_status = {r["status"]: r for r in panel["ad_runs"]}
+    assert by_status["completed"]["display_id"] == disp
+    assert by_status["failed"]["display_id"] is None  # nullable, key always present
