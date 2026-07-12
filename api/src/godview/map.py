@@ -128,3 +128,49 @@ async def get_map(conn) -> dict:
             },
         })
     return {"venues": venues}
+
+
+async def get_map_location(conn, location_id, *, limit: int = 20) -> dict | None:
+    """Venue panel payload: location header, systems with nested cameras/displays,
+    recent ad_runs (newest-first, bounded). Per-venue drill-down — a handful of
+    rows — so bounded queries + Python grouping, like godview/systems.get_system."""
+    loc = await conn.fetchrow(
+        "SELECT id, name, location_type::text AS location_type, city, country, "
+        "lat::float8 AS lat, lng::float8 AS lng, timezone, status::text AS status "
+        "FROM locations WHERE id = $1", location_id)
+    if loc is None:
+        return None
+
+    systems = [dict(r) for r in await conn.fetch(
+        "SELECT id, name, zone, status::text AS status, system_type::text AS system_type "
+        "FROM systems WHERE location_id = $1 ORDER BY name ASC, id ASC", location_id)]
+    sys_ids = [s["id"] for s in systems]
+
+    cams = await conn.fetch(
+        "SELECT id, system_id, name, status::text AS status, screen_id, last_seen_at "
+        "FROM cameras WHERE system_id = ANY($1::uuid[]) "
+        "ORDER BY name ASC NULLS LAST, id ASC", sys_ids)
+    disps = await conn.fetch(
+        "SELECT id, system_id, name, status::text AS status, screen_id, last_seen_at "
+        "FROM displays WHERE system_id = ANY($1::uuid[]) "
+        "ORDER BY name ASC NULLS LAST, id ASC", sys_ids)
+    by_sys_cams: dict = {}
+    for c in cams:
+        d = dict(c)
+        by_sys_cams.setdefault(d.pop("system_id"), []).append(d)
+    by_sys_disps: dict = {}
+    for x in disps:
+        d = dict(x)
+        by_sys_disps.setdefault(d.pop("system_id"), []).append(d)
+    for s in systems:
+        s["cameras"] = by_sys_cams.get(s["id"], [])
+        s["displays"] = by_sys_disps.get(s["id"], [])
+
+    ad_runs = [dict(r) for r in await conn.fetch(
+        "SELECT ar.id, ar.status::text AS status, ar.system_id, s.name AS system_name, "
+        "ar.started_at, ar.ended_at, ar.created_at "
+        "FROM ad_runs ar LEFT JOIN systems s ON s.id = ar.system_id "
+        "WHERE ar.location_id = $1 "
+        "ORDER BY ar.created_at DESC, ar.id DESC LIMIT $2", location_id, limit)]
+
+    return {"location": dict(loc), "systems": systems, "ad_runs": ad_runs}
