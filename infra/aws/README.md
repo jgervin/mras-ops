@@ -15,6 +15,8 @@ venue events. Rent hourly, run the event, terminate.
 - AWS account with **g4dn.xlarge quota** (Service Quotas → EC2 → "Running
   On-Demand G and VT instances" ≥ 4 vCPUs; separate quota for spot).
 - AWS CLI v2 configured (`aws configure`), default region set or `AWS_REGION` exported.
+- A **default VPC** in the region (launch.sh passes no vpc/subnet ids; that's the
+  out-of-the-box account state — accounts with the default VPC deleted need edits).
 - An EC2 **key pair** in that region (`aws ec2 create-key-pair --key-name mras-venue ...`).
 - Locally: the four sibling repos under one directory (`mras-ops`, `mras-vision`,
   `mras-composer`, `mras-overlays`) and a filled-in `mras-ops/.env`.
@@ -103,7 +105,7 @@ docker exec mras-ops-postgres-1 pg_dump -U mras -d mras --data-only \
 scp subject_profiles.sql ubuntu@$IP:
 
 # on the box
-docker exec -i mras-ops-postgres-1 psql -U mras -d mras < /dev/stdin < subject_profiles.sql
+docker exec -i mras-ops-postgres-1 psql -U mras -d mras < subject_profiles.sql
 ```
 
 Ad media in `mras-ops/assets/` rides along with the repo rsync. Register the
@@ -128,7 +130,8 @@ only to `ALLOW_CIDR`.
   NVIDIA device reservation. Everything else runs exactly as the base compose.
 - **`teardown.sh`** — lists mras-managed instances with uptime + estimated cost,
   confirms (skip with `FORCE=1`), terminates, waits, then warns about any
-  unattached EBS volumes still billing in the region.
+  unattached EBS volumes still billing in the region. The `mras-venue` security
+  group is deliberately left in place (free, reused by the next launch).
 
 ## Known gaps (deliberate, Phase-1 scope)
 
@@ -137,7 +140,7 @@ only to `ALLOW_CIDR`.
   (RTSP) exists in the schema but is not consumed. On EC2 there is no local
   camera, so the capture task fails gracefully while `/enroll`, `/health`, and
   the trigger pipeline still work — the box is fully exercisable via API today.
-  RTSP ingest is filed as a follow-up in mras-vision.
+  RTSP ingest is filed as mras-vision#38.
 - `DEEPFACE_BACKEND` is set to `cuda` for consistency but **no code reads it** —
   TF/torch auto-detect the GPU. If GPU utilization is zero, debug with the
   verify commands above, not that variable.

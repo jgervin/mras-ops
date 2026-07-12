@@ -24,6 +24,8 @@ KEY_NAME="${KEY_NAME:-}"
 [[ -n "$KEY_NAME" ]] || die "KEY_NAME is required (an existing EC2 key pair name)"
 ALLOW_CIDR="${ALLOW_CIDR:-}"
 [[ -n "$ALLOW_CIDR" ]] || die "ALLOW_CIDR is required (e.g. \$(curl -s https://checkip.amazonaws.com)/32)"
+[[ "$ALLOW_CIDR" != "0.0.0.0/0" ]] \
+  || die "refusing ALLOW_CIDR=0.0.0.0/0 — the app ports have no auth; scope to your real IP/venue CIDR"
 
 INSTANCE_TYPE="${INSTANCE_TYPE:-g4dn.xlarge}"
 SPOT="${SPOT:-0}"
@@ -137,10 +139,10 @@ instance $instance_id is running at $ip
 Next steps (full runbook: infra/aws/README.md):
   1. ssh -i <your-key.pem> ubuntu@$ip            # verify GPU: nvidia-smi
   2. from your laptop, sync the repos (sibling layout matters):
-       rsync -az --exclude .git --exclude .venv --exclude node_modules --exclude .claude \\
+       rsync -az --exclude .git --exclude .venv --exclude node_modules --exclude .claude --exclude .env \\
          ~/code/mras-ops ~/code/mras-vision ~/code/mras-composer ~/code/mras-overlays \\
          ubuntu@$ip:mras/
-  3. scp ~/code/mras-ops/.env ubuntu@$ip:mras/mras-ops/.env
+  3. scp ~/code/mras-ops/.env ubuntu@$ip:mras/mras-ops/.env   # the ONLY secrets channel (rsync excludes .env)
   4. on the box:
        cd ~/mras/mras-ops && docker compose -f docker-compose.yml \\
          -f infra/aws/docker-compose.aws.yml --profile docker-vision up -d --build

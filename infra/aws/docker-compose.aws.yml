@@ -11,8 +11,10 @@
 services:
   mras-vision:
     build:
-      # Relative to this file: ../../../mras-vision == the sibling checkout.
-      context: ../../../mras-vision
+      # Compose resolves relative paths in additional -f files against the
+      # PROJECT directory (the first -f file's dir, i.e. the mras-ops root),
+      # NOT this file's dir — so this matches the base file's sibling layout.
+      context: ../mras-vision
       # Keep in sync with mras-vision/Dockerfile. Adds the CUDA libraries
       # TensorFlow needs to see the T4: plain `tensorflow` pip wheels on Linux
       # ship no CUDA runtime, so DeepFace/ArcFace would silently run on CPU.
