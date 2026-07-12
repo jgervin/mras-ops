@@ -17,6 +17,12 @@ failures, not a device status):
                       the composer's ad-run-less idle playbacks (which never
                       receive 'ended') can therefore never glow.
   failures_last_hour  failed ad_runs + failed compositions in the last hour
+  org                 dominant org by system count, tie-break count DESC then
+                      organization_id; nullable by type, unreachable-null
+                      today (map venues always have systems,
+                      systems.organization_id NOT NULL)
+  last_run_created_at max(ad_runs.created_at), UNWINDOWED (monotone new-run
+                      delta signal for the globe pulse)
 """
 
 _MAP_SQL = """
@@ -76,10 +82,25 @@ act AS (
                                OR open_playback)                             AS playing,
            count(*) FILTER (WHERE ar_created_at >= now() - interval '1 hour') AS runs_last_hour,
            count(*) FILTER (WHERE failed_last_hour)                          AS failures_last_hour,
-           NULLIF(max(last_ts), '-infinity')                                 AS last_activity_at
+           NULLIF(max(last_ts), '-infinity')                                 AS last_activity_at,
+           max(ar_created_at)                                                AS last_run_created_at
     FROM tr
     WHERE location_id IS NOT NULL
     GROUP BY location_id
+),
+vorg AS (
+    -- Dominant org per venue, derived truthfully from systems.organization_id
+    -- (NOT NULL — 012_physical.sql:29). Deterministic tie-break: most systems
+    -- first, then lowest organization_id; name joined for the client org chip.
+    SELECT DISTINCT ON (location_id) location_id, organization_id, org_name
+    FROM (
+        SELECT s.location_id, s.organization_id, o.name AS org_name,
+               count(*) AS n
+        FROM systems s
+        JOIN organizations o ON o.id = s.organization_id
+        GROUP BY s.location_id, s.organization_id, o.name
+    ) t
+    ORDER BY location_id, n DESC, organization_id
 )
 SELECT l.id AS location_id, l.name, l.location_type::text AS location_type,
        l.city, l.country, l.lat::float8 AS lat, l.lng::float8 AS lng,
@@ -89,15 +110,18 @@ SELECT l.id AS location_id, l.name, l.location_type::text AS location_type,
        CASE COALESCE(dev.worst_rank, 1)
             WHEN 4 THEN 'offline' WHEN 3 THEN 'retired'
             WHEN 2 THEN 'degraded' ELSE 'active' END AS worst_status,
+       vorg.organization_id AS org_id, vorg.org_name,
        COALESCE(act.composing, 0)          AS composing,
        COALESCE(act.playing, 0)            AS playing,
        COALESCE(act.runs_last_hour, 0)     AS runs_last_hour,
        COALESCE(act.failures_last_hour, 0) AS failures_last_hour,
-       act.last_activity_at
+       act.last_activity_at,
+       act.last_run_created_at
 FROM locations l
 JOIN sys ON sys.location_id = l.id
 LEFT JOIN dev ON dev.location_id = l.id
 LEFT JOIN act ON act.location_id = l.id
+LEFT JOIN vorg ON vorg.location_id = l.id
 ORDER BY l.name ASC, l.id ASC
 """
 
@@ -114,6 +138,8 @@ async def get_map(conn) -> dict:
             "country": r["country"],
             "lat": r["lat"],
             "lng": r["lng"],
+            "org": ({"id": r["org_id"], "name": r["org_name"]}
+                    if r["org_id"] is not None else None),
             "rollup": {
                 "systems": r["systems"],
                 "cameras": r["cameras"],
@@ -125,6 +151,7 @@ async def get_map(conn) -> dict:
                 "runs_last_hour": r["runs_last_hour"],
                 "failures_last_hour": r["failures_last_hour"],
                 "last_activity_at": r["last_activity_at"],
+                "last_run_created_at": r["last_run_created_at"],
             },
         })
     return {"venues": venues}
