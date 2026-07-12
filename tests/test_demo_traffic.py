@@ -6,8 +6,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from scripts.demo_traffic import (SETTLE_GAP_S, build_sequence, emit_sequence,
-                                  load_demo_org, run)
+from scripts.demo_traffic import (DEMO_ORG_IDS, DEMO_UMBRELLA_ORG, SETTLE_GAP_S,
+                                  build_sequence, emit_sequence, load_demo_orgs,
+                                  run)
 
 TARGET = {
     "system_id": "33333333-3333-4333-8333-333333333333",
@@ -16,6 +17,7 @@ TARGET = {
     "venue": "Mall of America",
     "camera_screen_id": "demo-cam-moa-1-1",
     "display_screen_id": "demo-disp-moa-1-1",
+    "organization_id": "dea00000-0000-4000-8000-000000000002",  # Northline — a RETAILER, deliberately not the umbrella
 }
 
 
@@ -75,15 +77,18 @@ async def test_emit_sequence_stamps_scope_and_timestamps():
     pool = AsyncMock()
     sleep = AsyncMock()
     beats = build_sequence("trig-2", TARGET)
-    await emit_sequence(pool, "dea00000-0000-4000-8000-000000000001", TARGET,
-                        "trig-2", beats, sleep=sleep)
+    await emit_sequence(pool, TARGET, "trig-2", beats, sleep=sleep)
     assert pool.execute.await_count == len(beats)
     for call in pool.execute.await_args_list:
         args = call.args
         # (sql, trigger_id, service, event_type, status, payload_json, org, loc, sys)
         assert "INSERT INTO events" in args[0]
         assert args[2] == "mras-composer"  # projector routing registry service key
-        assert args[6] == "dea00000-0000-4000-8000-000000000001"
+        # stamped with the TARGET system's org — NEVER the umbrella. The
+        # projector back-stamps org from the system row; insert-time value must
+        # match so the back-stamp overwrites with identical values.
+        assert args[6] == TARGET["organization_id"]
+        assert args[6] != DEMO_UMBRELLA_ORG
         assert args[7] == TARGET["location_id"]
         assert args[8] == TARGET["system_id"]
         payload = json.loads(args[5])
@@ -100,11 +105,22 @@ async def test_emit_sequence_stamps_scope_and_timestamps():
     assert sleep.await_count == sum(1 for d, *_ in beats if d > 0)
 
 
-async def test_load_demo_org_hard_exits_when_absent():
+async def test_load_demo_orgs_hard_exits_when_umbrella_absent():
+    # retailers alone are not enough — the umbrella is the seed sentinel
     pool = AsyncMock()
-    pool.fetchval = AsyncMock(return_value=None)
+    pool.fetch = AsyncMock(return_value=[{"id": o} for o in DEMO_ORG_IDS[1:]])
     with pytest.raises(SystemExit):
-        await load_demo_org(pool)
+        await load_demo_orgs(pool)
+
+
+async def test_load_demo_orgs_returns_present_subset():
+    pool = AsyncMock()
+    present = [DEMO_ORG_IDS[0], DEMO_ORG_IDS[2]]  # umbrella + one retailer
+    pool.fetch = AsyncMock(return_value=[{"id": o} for o in present])
+    assert await load_demo_orgs(pool) == present
+    # targets query is scoped to exactly the present set
+    sql = pool.fetch.await_args.args[0]
+    assert "ANY($1::uuid[])" in sql
 
 
 async def test_run_drains_in_flight_tasks_without_mutation_error(monkeypatch):
@@ -119,12 +135,18 @@ async def test_run_drains_in_flight_tasks_without_mutation_error(monkeypatch):
     targets = [
         {**TARGET, "system_id": f"sys-{i}", "location_id": f"loc-{i}",
          "system_name": f"System {i}", "venue": f"Venue {i}",
-         "camera_screen_id": f"cam-{i}", "display_screen_id": f"disp-{i}"}
+         "camera_screen_id": f"cam-{i}", "display_screen_id": f"disp-{i}",
+         "organization_id": DEMO_ORG_IDS[1 + i % 4]}
         for i in range(6)
     ]
     pool = AsyncMock()
     pool.fetchval = AsyncMock(return_value="dea00000-0000-4000-8000-000000000001")
-    pool.fetch = AsyncMock(return_value=[dict(t) for t in targets])
+    # two-fetch shape (org resolution, then targets) per run() call, repeated
+    # for each of the outer loop's 5 invocations below.
+    pool.fetch = AsyncMock(side_effect=[
+        [{"id": o} for o in DEMO_ORG_IDS],       # load_demo_orgs
+        [dict(t) for t in targets],              # load_targets
+    ] * 5)
     monkeypatch.setattr("asyncpg.create_pool", AsyncMock(return_value=pool))
 
     for _ in range(5):
