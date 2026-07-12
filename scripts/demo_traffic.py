@@ -192,7 +192,7 @@ async def run(rate: float, failure_pct: float, duration_s: float | None) -> None
             task.add_done_callback(tasks.discard)
             # jittered pacing around the fleet-wide rate
             await asyncio.sleep(random.uniform(0.5, 1.5) * 60.0 / rate)
-        for task in tasks:  # let in-flight sequences finish cleanly
+        for task in list(tasks):  # snapshot: done-callbacks mutate `tasks` mid-drain
             await task
     finally:
         await pool.close()
