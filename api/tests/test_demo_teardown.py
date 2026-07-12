@@ -16,7 +16,14 @@ pytestmark = pytest.mark.usefixtures("godview_isolate")
 BASE = pathlib.Path(__file__).resolve().parents[2] / "db" / "seed"
 SEED = BASE / "seed_demo_fleet.sql"
 TEARDOWN = BASE / "teardown_demo_fleet.sql"
-DEMO_ORG = "dea00000-0000-4000-8000-000000000001"
+DEMO_ORG = "dea00000-0000-4000-8000-000000000001"  # umbrella (v1 name kept)
+DEMO_RETAILERS = {
+    "dea00000-0000-4000-8000-000000000002": "Northline Apparel",
+    "dea00000-0000-4000-8000-000000000003": "Vantage Motors",
+    "dea00000-0000-4000-8000-000000000004": "Corebrew Coffee",
+    "dea00000-0000-4000-8000-000000000005": "Meridian Screens",
+}
+DEMO_ORG_UUIDS = [uuid.UUID(DEMO_ORG)] + [uuid.UUID(k) for k in DEMO_RETAILERS]
 
 
 async def _apply(pool, path):
@@ -25,26 +32,28 @@ async def _apply(pool, path):
 
 
 async def _inject_demo_activity(pool):
-    """Simulate what the generator + projector produce: composition_run, ad_run,
-    playback, and an events row BACK-STAMPED with ad_run_id (the FK cycle the
-    teardown must break), plus an unresolved_devices row pointing at a demo event."""
+    """Simulate v2 generator + projector output: activity attributed to a
+    RETAILER org (never the umbrella — post-split the umbrella owns no systems),
+    incl. an events row BACK-STAMPED with ad_run_id (the FK cycle) and an
+    unresolved_devices row pointing at a demo event."""
     row = await pool.fetchrow(
-        "SELECT s.id AS system_id, s.location_id, d.screen_id "
+        "SELECT s.id AS system_id, s.organization_id, s.location_id, d.screen_id "
         "FROM systems s JOIN displays d ON d.system_id = s.id "
-        "WHERE s.organization_id = $1 LIMIT 1", DEMO_ORG)
+        "WHERE s.organization_id = ANY($1::uuid[]) LIMIT 1", DEMO_ORG_UUIDS)
+    assert row is not None and str(row["organization_id"]) != DEMO_ORG
     trig = uuid.uuid4()
     comp_id = await pool.fetchval(
         "INSERT INTO composition_runs (trigger_id, organization_id, location_id, system_id, status) "
         "VALUES ($1,$2,$3,$4,'rendered') RETURNING id",
-        trig, uuid.UUID(DEMO_ORG), row["location_id"], row["system_id"])
+        trig, row["organization_id"], row["location_id"], row["system_id"])
     ad_run_id = await pool.fetchval(
         "INSERT INTO ad_runs (trigger_id, organization_id, location_id, system_id, "
         "composition_run_id, status) VALUES ($1,$2,$3,$4,$5,'completed') RETURNING id",
-        trig, uuid.UUID(DEMO_ORG), row["location_id"], row["system_id"], comp_id)
+        trig, row["organization_id"], row["location_id"], row["system_id"], comp_id)
     await pool.execute(
         "INSERT INTO playbacks (trigger_id, screen_id, ad_run_id, organization_id, "
         "location_id, system_id, status) VALUES ($1,$2,$3,$4,$5,$6,'ended')",
-        trig, row["screen_id"], ad_run_id, uuid.UUID(DEMO_ORG),
+        trig, row["screen_id"], ad_run_id, row["organization_id"],
         row["location_id"], row["system_id"])
     event_id = await pool.fetchval(
         "INSERT INTO events (trigger_id, service, event_type, status, payload, "
@@ -52,7 +61,7 @@ async def _inject_demo_activity(pool):
         "VALUES ($1,'mras-composer','ad_run','completed',$2::jsonb,$3,$4,$5,$6) RETURNING id",
         trig, json.dumps({"demo_seed": True, "screen_id": row["screen_id"],
                           "screen_kind": "display"}),
-        uuid.UUID(DEMO_ORG), row["location_id"], row["system_id"], ad_run_id)
+        row["organization_id"], row["location_id"], row["system_id"], ad_run_id)
     await pool.execute(
         "INSERT INTO unresolved_devices (screen_id, kind, event_id) VALUES ($1,'display',$2)",
         "demo-disp-never-registered", event_id)
@@ -65,20 +74,20 @@ async def test_teardown_leaves_zero_demo_rows(projector_pool):
     await _apply(projector_pool, TEARDOWN)
 
     checks = {
-        "organizations": "SELECT count(*) FROM organizations WHERE id = $1",
+        "organizations": "SELECT count(*) FROM organizations WHERE id = ANY($1::uuid[])",
         "locations": ("SELECT count(*) FROM locations WHERE metadata->>'demo_seed' = 'true'", None),
-        "location_participants": "SELECT count(*) FROM location_participants WHERE organization_id = $1",
-        "systems": "SELECT count(*) FROM systems WHERE organization_id = $1",
-        "ad_runs": "SELECT count(*) FROM ad_runs WHERE organization_id = $1",
-        "composition_runs": "SELECT count(*) FROM composition_runs WHERE organization_id = $1",
-        "playbacks": "SELECT count(*) FROM playbacks WHERE organization_id = $1",
-        "events": "SELECT count(*) FROM events WHERE organization_id = $1",
+        "location_participants": "SELECT count(*) FROM location_participants WHERE organization_id = ANY($1::uuid[])",
+        "systems": "SELECT count(*) FROM systems WHERE organization_id = ANY($1::uuid[])",
+        "ad_runs": "SELECT count(*) FROM ad_runs WHERE organization_id = ANY($1::uuid[])",
+        "composition_runs": "SELECT count(*) FROM composition_runs WHERE organization_id = ANY($1::uuid[])",
+        "playbacks": "SELECT count(*) FROM playbacks WHERE organization_id = ANY($1::uuid[])",
+        "events": "SELECT count(*) FROM events WHERE organization_id = ANY($1::uuid[])",
     }
     for name, q in checks.items():
         if isinstance(q, tuple):
             n = await projector_pool.fetchval(q[0])
         else:
-            n = await projector_pool.fetchval(q, uuid.UUID(DEMO_ORG))
+            n = await projector_pool.fetchval(q, DEMO_ORG_UUIDS)
         assert n == 0, f"{name} still has demo rows"
     # devices/groups are gone (their parent systems are gone; count all —
     # godview_isolate started us from a clean slate)
@@ -123,4 +132,16 @@ async def test_teardown_idempotent(projector_pool):
     await _apply(projector_pool, TEARDOWN)
     await _apply(projector_pool, TEARDOWN)  # second run: clean no-op, no errors
     assert await projector_pool.fetchval(
-        "SELECT count(*) FROM organizations WHERE id = $1", uuid.UUID(DEMO_ORG)) == 0
+        "SELECT count(*) FROM organizations WHERE id = ANY($1::uuid[])", DEMO_ORG_UUIDS) == 0
+
+
+async def test_teardown_removes_relationships_and_all_five_orgs(projector_pool):
+    await _apply(projector_pool, SEED)
+    await _apply(projector_pool, TEARDOWN)
+    assert await projector_pool.fetchval(
+        "SELECT count(*) FROM organization_relationships "
+        "WHERE from_organization_id = ANY($1::uuid[]) "
+        "   OR to_organization_id = ANY($1::uuid[])", DEMO_ORG_UUIDS) == 0
+    assert await projector_pool.fetchval(
+        "SELECT count(*) FROM organizations WHERE id = ANY($1::uuid[])",
+        DEMO_ORG_UUIDS) == 0

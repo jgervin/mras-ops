@@ -37,7 +37,19 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-DEMO_ORG_NAME = "Demo Retail Group"
+DEMO_UMBRELLA_ORG = "dea00000-0000-4000-8000-000000000001"  # Demo Retail Group
+# The deterministic demo-org uuid family (seed v2): umbrella + 4 retailers.
+# Targets are scoped to the PRESENT members of this set; events are stamped
+# with each target system's own org (the projector back-stamps org from the
+# system row — api/src/projector/scope.py — and must overwrite with identical
+# values).
+DEMO_ORG_IDS = [
+    DEMO_UMBRELLA_ORG,
+    "dea00000-0000-4000-8000-000000000002",  # Northline Apparel
+    "dea00000-0000-4000-8000-000000000003",  # Vantage Motors
+    "dea00000-0000-4000-8000-000000000004",  # Corebrew Coffee
+    "dea00000-0000-4000-8000-000000000005",  # Meridian Screens
+]
 SERVICE = "mras-composer"  # must match the projector routing registry keys
 # projector settle_ms=2000 + poll_ms=1000 => summaries trail inserts by ~2-3s;
 # status beats are scheduled no tighter than this (expected lag, not a bug).
@@ -107,9 +119,12 @@ def build_sequence(trigger_id: str, target: dict, fail: bool = False) -> list:
     return beats
 
 
-async def emit_sequence(pool, org_id, target, trigger_id, beats,
+async def emit_sequence(pool, target, trigger_id, beats,
                         sleep=asyncio.sleep, clock=time.monotonic) -> None:
-    """Emit one sequence, pacing with `sleep`, stamping timestamps at emission."""
+    """Emit one sequence, pacing with `sleep`, stamping timestamps at emission.
+
+    Events are stamped with the TARGET system's org (never the umbrella) so
+    the projector's back-stamp overwrites with identical values."""
     started = None
     for delay_s, event_type, status, payload in beats:
         if delay_s > 0:
@@ -122,31 +137,35 @@ async def emit_sequence(pool, org_id, target, trigger_id, beats,
         if (event_type, status) == ("playback", "ended"):
             payload["duration_ms"] = int(((clock() - started) if started else 0) * 1000)
         await pool.execute(_INSERT, trigger_id, SERVICE, event_type, status,
-                           json.dumps(payload), org_id,
+                           json.dumps(payload), target["organization_id"],
                            target["location_id"], target["system_id"])
         print(f"[demo-traffic] {target['venue']} / {target['system_name']} "
               f"{event_type}/{status} trigger={trigger_id}")
 
 
-async def load_demo_org(pool):
-    """Hard-scope guard: exits (SystemExit) when the demo org is absent, so the
-    generator cannot run post-teardown."""
-    org_id = await pool.fetchval(
-        "SELECT id FROM organizations WHERE name = $1 AND metadata->>'demo_seed' = 'true'",
-        DEMO_ORG_NAME)
-    if org_id is None:
-        print("[demo-traffic] demo org absent — apply "
+async def load_demo_orgs(pool) -> list:
+    """Hard-scope guard: return the PRESENT members of the demo-org family.
+    The umbrella is the seed sentinel — hard-exit when it is absent (the
+    generator cannot run post-teardown; teardown removes the whole family in
+    one transaction)."""
+    rows = await pool.fetch(
+        "SELECT id FROM organizations "
+        "WHERE id = ANY($1::uuid[]) AND metadata->>'demo_seed' = 'true'",
+        DEMO_ORG_IDS)
+    present = [str(r["id"]) for r in rows]
+    if DEMO_UMBRELLA_ORG not in present:
+        print("[demo-traffic] demo umbrella org absent — apply "
               "/Users/jn/code/mras-ops/db/seed/seed_demo_fleet.sql first. Exiting.")
         raise SystemExit(1)
-    return org_id
+    return present
 
 
-async def load_targets(pool, org_id) -> list[dict]:
-    """One target per ACTIVE display of the demo org (hard-scoped by the WHERE);
-    each carries its system's first camera for render-lane scope."""
+async def load_targets(pool, org_ids) -> list[dict]:
+    """One target per ACTIVE display of the demo-org SET (hard-scoped by the
+    WHERE); each row carries its system's org for insert-time stamping."""
     rows = await pool.fetch(
         """
-        SELECT s.id AS system_id, s.location_id, s.name AS system_name,
+        SELECT s.id AS system_id, s.organization_id, s.location_id, s.name AS system_name,
                l.name AS venue, d.screen_id AS display_screen_id,
                (SELECT c.screen_id FROM cameras c
                  WHERE c.system_id = s.id AND c.status <> 'retired'
@@ -154,8 +173,8 @@ async def load_targets(pool, org_id) -> list[dict]:
         FROM systems s
         JOIN locations l ON l.id = s.location_id
         JOIN displays d ON d.system_id = s.id AND d.status = 'active'
-        WHERE s.organization_id = $1
-        """, org_id)
+        WHERE s.organization_id = ANY($1::uuid[])
+        """, org_ids)
     return [dict(r) for r in rows if r["camera_screen_id"] is not None]
 
 
@@ -165,8 +184,8 @@ async def run(rate: float, failure_pct: float, duration_s: float | None) -> None
     pool = await asyncpg.create_pool(
         os.getenv("DATABASE_URL", "postgresql://mras:mras@localhost:5432/mras"))
     try:
-        org_id = await load_demo_org(pool)
-        targets = await load_targets(pool, org_id)
+        org_ids = await load_demo_orgs(pool)
+        targets = await load_targets(pool, org_ids)
         if not targets:
             print("[demo-traffic] no seeded active displays — exiting")
             raise SystemExit(1)
@@ -177,17 +196,20 @@ async def run(rate: float, failure_pct: float, duration_s: float | None) -> None
         tasks: set = set()
         t0 = time.monotonic()
         while duration_s is None or time.monotonic() - t0 < duration_s:
-            # hard-scope re-check: stop mid-run the moment teardown removes the org
+            # hard-scope re-check: umbrella is the seed sentinel — teardown
+            # removes the whole family in one transaction, so the umbrella's
+            # disappearance is the set's disappearance.
             if await pool.fetchval(
-                    "SELECT 1 FROM organizations WHERE id = $1", org_id) is None:
-                print("[demo-traffic] demo org gone (teardown) — exiting")
+                    "SELECT 1 FROM organizations WHERE id = $1",
+                    DEMO_UMBRELLA_ORG) is None:
+                print("[demo-traffic] demo umbrella org gone (teardown) — exiting")
                 break
             target = random.choices(targets, weights=weights, k=1)[0]
             trigger_id = str(uuid.uuid4())
             fail = random.random() * 100.0 < failure_pct
             beats = build_sequence(trigger_id, target, fail=fail)
             task = asyncio.create_task(
-                emit_sequence(pool, org_id, target, trigger_id, beats))
+                emit_sequence(pool, target, trigger_id, beats))
             tasks.add(task)
             task.add_done_callback(tasks.discard)
             # jittered pacing around the fleet-wide rate
