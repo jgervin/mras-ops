@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from src.godview.ad_runs import get_ad_runs, get_ad_run_filters, get_ad_run
 from src.godview.dashboard import get_dashboard
+from src.godview.map import get_map, get_map_location
 from src.godview.events import get_events
 from src.godview.systems import get_systems, get_system
 from src.cameras import CameraPatch, patch_camera
@@ -403,6 +404,22 @@ async def events_stream():
 async def god_view_dashboard():
     async with _db.acquire() as conn:
         return await get_dashboard(conn)
+
+
+@app.get("/god-view/map")
+async def god_view_map():
+    async with _db.acquire() as conn:
+        return await get_map(conn)
+
+
+@app.get("/god-view/map/locations/{location_id}")
+async def god_view_map_location(location_id: str, limit: int = 20):
+    async with _db.acquire() as conn:
+        result = await get_map_location(conn, _uuid_or_400(location_id),
+                                        limit=max(1, min(limit, 50)))
+    if result is None:
+        raise HTTPException(status_code=404, detail="location not found")
+    return result
 
 
 @app.get("/god-view/ad-runs")
