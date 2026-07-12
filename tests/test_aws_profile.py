@@ -104,6 +104,14 @@ def test_launch_requires_key_name_and_allow_cidr(aws_env):
     assert "ALLOW_CIDR" in r.stderr
 
 
+def test_launch_refuses_world_open_cidr(aws_env):
+    r = run_script(
+        "launch.sh", aws_env, KEY_NAME="venue-key", ALLOW_CIDR="0.0.0.0/0",
+    )
+    assert r.returncode != 0
+    assert "0.0.0.0/0" in r.stderr
+
+
 def test_launch_aborts_when_instance_already_running(aws_env):
     r = run_script(
         "launch.sh", aws_env, KEY_NAME="venue-key",
@@ -155,3 +163,11 @@ def test_compose_aws_override_adds_gpu_and_cuda_to_vision():
     assert "mras-vision" in r.stdout
     assert "nvidia" in r.stdout, "vision service should reserve the NVIDIA GPU"
     assert "and-cuda" in r.stdout, "CUDA-enabled TF should be in the AWS build"
+    # Compose resolves relative paths in additional -f files against the
+    # PROJECT directory (the first -f file's dir), not the override file's
+    # dir — the override must use ../mras-vision like the base file, or the
+    # first real `up --build` on the EC2 box dies mid-runbook.
+    sibling_context = str((REPO / ".." / "mras-vision").resolve())
+    assert sibling_context in r.stdout, (
+        f"vision build context must resolve to the sibling checkout {sibling_context}"
+    )
