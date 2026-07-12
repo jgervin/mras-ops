@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from scripts.demo_traffic import (SETTLE_GAP_S, build_sequence, emit_sequence,
-                                  load_demo_org)
+                                  load_demo_org, run)
 
 TARGET = {
     "system_id": "33333333-3333-4333-8333-333333333333",
@@ -105,3 +105,27 @@ async def test_load_demo_org_hard_exits_when_absent():
     pool.fetchval = AsyncMock(return_value=None)
     with pytest.raises(SystemExit):
         await load_demo_org(pool)
+
+
+async def test_run_drains_in_flight_tasks_without_mutation_error(monkeypatch):
+    """Regression: run()'s post-duration drain loop iterates the live `tasks`
+    set while each task's done-callback discards itself from that same set,
+    raising 'RuntimeError: Set changed size during iteration'. Shrink the
+    settle gap + jitter so many sequences overlap in a short --duration, and
+    run several targets at a high rate to maximize task churn during drain."""
+    monkeypatch.setattr("scripts.demo_traffic.SETTLE_GAP_S", 0.01)
+    monkeypatch.setattr("random.uniform", lambda a, b: 0.005)
+
+    targets = [
+        {**TARGET, "system_id": f"sys-{i}", "location_id": f"loc-{i}",
+         "system_name": f"System {i}", "venue": f"Venue {i}",
+         "camera_screen_id": f"cam-{i}", "display_screen_id": f"disp-{i}"}
+        for i in range(6)
+    ]
+    pool = AsyncMock()
+    pool.fetchval = AsyncMock(return_value="dea00000-0000-4000-8000-000000000001")
+    pool.fetch = AsyncMock(return_value=[dict(t) for t in targets])
+    monkeypatch.setattr("asyncpg.create_pool", AsyncMock(return_value=pool))
+
+    for _ in range(5):
+        await run(rate=6000.0, failure_pct=0.0, duration_s=0.3)
