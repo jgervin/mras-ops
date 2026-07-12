@@ -1,4 +1,4 @@
-"""Demo fleet seed (Globe Plan A): shape, tags, idempotency.
+"""Demo fleet seed v2 (Globe Plan C): retailer split, shape, tags, idempotency.
 
 Runs against the throwaway mras_projector_test DB (projector_pool fixture).
 Requires the dockerized Postgres running:

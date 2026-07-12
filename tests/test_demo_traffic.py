@@ -111,6 +111,7 @@ async def test_load_demo_orgs_hard_exits_when_umbrella_absent():
     pool.fetch = AsyncMock(return_value=[{"id": o} for o in DEMO_ORG_IDS[1:]])
     with pytest.raises(SystemExit):
         await load_demo_orgs(pool)
+    assert pool.fetch.await_args.args[1] == DEMO_ORG_IDS
 
 
 async def test_load_demo_orgs_returns_present_subset():
@@ -118,9 +119,10 @@ async def test_load_demo_orgs_returns_present_subset():
     present = [DEMO_ORG_IDS[0], DEMO_ORG_IDS[2]]  # umbrella + one retailer
     pool.fetch = AsyncMock(return_value=[{"id": o} for o in present])
     assert await load_demo_orgs(pool) == present
-    # targets query is scoped to exactly the present set
+    # org-resolution query is set-scoped (load_targets' scoping is asserted separately)
     sql = pool.fetch.await_args.args[0]
     assert "ANY($1::uuid[])" in sql
+    assert pool.fetch.await_args.args[1] == DEMO_ORG_IDS
 
 
 async def test_run_drains_in_flight_tasks_without_mutation_error(monkeypatch):
