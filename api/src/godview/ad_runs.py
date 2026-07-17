@@ -67,12 +67,16 @@ async def get_ad_run(conn, ad_run_id) -> dict | None:
            WHERE id = (SELECT personalization_decision_id FROM ad_runs WHERE id = $1)""",
         ad_run_id)
     comp = await conn.fetchrow(
-        """SELECT id, render_mode::text AS render_mode, status::text AS status,
-                  error_code, error_message, used_likeness, used_voice_clone,
-                  ad_id, component_id, input_asset_id, output_asset_id,
-                  used_spoken_name, used_visible_name
-           FROM composition_runs
-           WHERE id = (SELECT composition_run_id FROM ad_runs WHERE id = $1)""",
+        """SELECT cr.id, cr.render_mode::text AS render_mode, cr.status::text AS status,
+                  cr.error_code, cr.error_message, cr.used_likeness, cr.used_voice_clone,
+                  cr.ad_id, cr.component_id, cr.input_asset_id, cr.output_asset_id,
+                  cr.used_spoken_name, cr.used_visible_name,
+                  c.slug AS component_slug, c.source, c.props_schema,
+                  a.default_props, a.personalized_field, a.base_video
+           FROM composition_runs cr
+           LEFT JOIN components c ON c.id = cr.component_id
+           LEFT JOIN ads a ON a.id = cr.ad_id
+           WHERE cr.id = (SELECT composition_run_id FROM ad_runs WHERE id = $1)""",
         ad_run_id)
     plays = await conn.fetch(
         "SELECT id, status::text AS status, display_id, screen_id, error_code, error_message "
@@ -114,7 +118,7 @@ async def get_ad_run(conn, ad_run_id) -> dict | None:
     return {
         "ad_run": dict(ar),
         "personalization_decision": _jsonb(dec, "decision_factors") if dec else None,
-        "composition_run": dict(comp) if comp else None,
+        "composition_run": _jsonb(_jsonb(comp, "props_schema"), "default_props") if comp else None,
         "playbacks": [dict(p) for p in plays],
         "viewer_exposure": dict(exposure),
     }
